@@ -64,6 +64,15 @@ class SQLiteStore:
                 detail TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS browser_cookies (
+                account_id TEXT PRIMARY KEY,
+                platform TEXT,
+                cookies TEXT,
+                local_storage TEXT,
+                saved_at REAL,
+                expires_at REAL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(bound_account_id);
             CREATE INDEX IF NOT EXISTS idx_log_time ON activity_log(timestamp);
         """)
@@ -180,6 +189,42 @@ class SQLiteStore:
         conn = self._get_conn()
         cutoff = time.time() - days * 86400
         conn.execute("DELETE FROM activity_log WHERE timestamp < ?", (cutoff,))
+        conn.commit()
+
+    # ===== Browser Cookies =====
+
+    def save_cookies(self, account_id: str, platform: str, cookies: list, local_storage: dict = None, ttl_days: int = 30):
+        """保存浏览器 Cookie 到数据库"""
+        import json
+        conn = self._get_conn()
+        now = time.time()
+        conn.execute("""
+            INSERT INTO browser_cookies (account_id, platform, cookies, local_storage, saved_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                cookies=excluded.cookies, local_storage=excluded.local_storage,
+                saved_at=excluded.saved_at, expires_at=excluded.expires_at
+        """, (account_id, platform, json.dumps(cookies), json.dumps(local_storage or {}), now, now + ttl_days * 86400))
+        conn.commit()
+        logger.info(f"🍪 Saved {len(cookies)} cookies for {account_id}")
+
+    def load_cookies(self, account_id: str) -> Optional[tuple]:
+        """加载浏览器 Cookie，返回 (cookies, local_storage) 或 None"""
+        import json
+        conn = self._get_conn()
+        row = conn.execute("SELECT cookies, local_storage, expires_at FROM browser_cookies WHERE account_id=?", (account_id,)).fetchone()
+        if not row:
+            return None
+        if time.time() > row["expires_at"]:
+            conn.execute("DELETE FROM browser_cookies WHERE account_id=?", (account_id,))
+            conn.commit()
+            return None
+        return (json.loads(row["cookies"]), json.loads(row["local_storage"] or "{}"))
+
+    def delete_cookies(self, account_id: str):
+        """删除浏览器 Cookie"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM browser_cookies WHERE account_id=?", (account_id,))
         conn.commit()
 
     def close(self):

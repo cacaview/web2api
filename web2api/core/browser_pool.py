@@ -163,6 +163,7 @@ class BrowserPool:
         self.playwright = None
         self.idle_timer_tasks: Dict[str, asyncio.Task] = {}
         self.health_check_task: Optional[asyncio.Task] = None
+        self._db = None  # SQLite store for cookie persistence
 
         logger.info(f"🔧 BrowserPool initialized (max_workers={browser_config.max_workers})")
 
@@ -250,6 +251,21 @@ class BrowserPool:
             # 在所有页面脚本之前执行，覆盖 navigator.webdriver 等指纹
             await context.add_init_script(STEALTH_SCRIPT)
 
+            # === 加载已保存的 Cookie ===
+            if self._db:
+                cookie_data = self._db.load_cookies(account_id)
+                if cookie_data:
+                    cookies, local_storage = cookie_data
+                    if cookies:
+                        await context.add_cookies(cookies)
+                        logger.debug(f"🍪 Loaded {len(cookies)} cookies for {account_id}")
+                    if local_storage:
+                        page = await context.new_page()
+                        await page.goto("about:blank")
+                        for k, v in local_storage.items():
+                            await page.evaluate(f"localStorage.setItem('{k}', '{v}')")
+                        logger.debug(f"🍪 Loaded {len(local_storage)} localStorage items")
+
             page = await context.new_page()
 
             if self.traffic_config.enabled and platform == "gemini":
@@ -296,6 +312,14 @@ class BrowserPool:
         worker = self.workers.get(worker_id)
         if not worker:
             return
+        # 保存 Cookie 到数据库
+        if self._db and worker.context and worker.account_id:
+            try:
+                cookies = await worker.context.cookies()
+                if cookies:
+                    self._db.save_cookies(worker.account_id, "unknown", cookies)
+            except Exception as e:
+                logger.debug(f"Failed to save cookies for {worker.account_id}: {e}")
         worker.status = WorkerStatus.IDLE
         worker.last_used_time = time.time()
         logger.debug(f"✓ Worker {worker_id} released to idle")

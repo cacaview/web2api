@@ -565,6 +565,72 @@ async def list_workers():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ========== Cookie Management ==========
+
+@app.post("/api/v1/admin/cookies/save")
+async def save_cookies(account_id: str, cookies: list, platform: str = "gemini"):
+    """手动保存浏览器 Cookie（用于登录后注入 Session）"""
+    try:
+        if not gateway.db:
+            raise HTTPException(status_code=503, detail="No storage backend")
+        gateway.db.save_cookies(account_id, platform, cookies)
+        gateway.db.log_event("info", account_id, "cookies_saved", f"Saved {len(cookies)} cookies for {platform}")
+        return {"status": "ok", "message": f"Saved {len(cookies)} cookies for {account_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/admin/cookies/{account_id}")
+async def load_cookies(account_id: str):
+    """查看已保存的 Cookie 信息"""
+    try:
+        if not gateway.db:
+            return {"status": "ok", "cookies": None, "message": "No storage backend"}
+        data = gateway.db.load_cookies(account_id)
+        if not data:
+            return {"status": "ok", "cookies": None, "message": "No saved cookies"}
+        cookies, local_storage = data
+        return {"status": "ok", "count": len(cookies), "has_local_storage": bool(local_storage)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/admin/cookies/{account_id}")
+async def delete_cookies(account_id: str):
+    """删除已保存的 Cookie"""
+    try:
+        if not gateway.db:
+            raise HTTPException(status_code=503, detail="No storage backend")
+        gateway.db.delete_cookies(account_id)
+        return {"status": "ok", "message": f"Cookies deleted for {account_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/admin/workers/{worker_id}/save-cookies")
+async def save_worker_cookies(worker_id: str):
+    """从运行中的 Worker 提取并保存 Cookie"""
+    try:
+        worker = gateway.browser_pool.workers.get(worker_id)
+        if not worker:
+            raise HTTPException(status_code=404, detail=f"Worker {worker_id} not found")
+        if not worker.context:
+            raise HTTPException(status_code=400, detail="Worker has no browser context")
+        cookies = await worker.context.cookies()
+        if not gateway.db:
+            raise HTTPException(status_code=503, detail="No storage backend")
+        gateway.db.save_cookies(worker.account_id or worker_id, "unknown", cookies)
+        return {"status": "ok", "message": f"Saved {len(cookies)} cookies from worker {worker_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}")

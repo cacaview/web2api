@@ -75,6 +75,7 @@ class APIGateway:
             self.config.browser,
             self.config.traffic_intercept,
         )
+        self.browser_pool._db = self.db
         await self.browser_pool.initialize()
 
         if self._redis_available:

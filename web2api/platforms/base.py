@@ -290,13 +290,30 @@ class BaseAutomator:
         try:
             # URL 检测
             url = self.page.url
-            if "accounts.google.com" in url or "login" in url.lower():
-                return PlatformError("login_required", "Redirected to login page", url)
+            if "accounts.google.com" in url or "/sorry" in url or "/blocked" in url:
+                return PlatformError("login_required", "Redirected to login/block page", url)
 
-            # CAPTCHA 检测
-            captcha = await self.page.query_selector('iframe[src*="captcha"], iframe[src*="recaptcha"], .g-recaptcha')
-            if captcha:
-                return PlatformError("captcha", "CAPTCHA detected", should_kill_worker=False, cooldown_minutes=30)
+            # CAPTCHA 检测（多种类型）
+            captcha_selectors = [
+                'iframe[src*="captcha"]', 'iframe[src*="recaptcha"]',
+                '.g-recaptcha', '[class*="captcha"]', '[id*="captcha"]',
+                'iframe[src*="challenges.cloudflare"]',  # Cloudflare Turnstile
+                '[class*="turnstile"]',
+                'div:has-text("请验证您是真人")',  # Chinese CAPTCHA
+                'div:has-text("Verify you are human")',
+            ]
+            for sel in captcha_selectors:
+                try:
+                    el = await self.page.query_selector(sel)
+                    if el and await el.is_visible():
+                        return PlatformError("captcha", "CAPTCHA/verification detected", should_kill_worker=False, cooldown_minutes=30)
+                except Exception:
+                    pass
+
+            # 检测 Cloudflare challenge 页面
+            page_text = await self.page.evaluate("() => document.body?.innerText?.substring(0, 500) || ''")
+            if "checking your browser" in page_text.lower() or "just a moment" in page_text.lower():
+                return PlatformError("captcha", "Cloudflare challenge page", should_kill_worker=False, cooldown_minutes=30)
 
             # 文本错误检测
             text_err = await self.check_for_errors()
