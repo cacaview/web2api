@@ -48,7 +48,7 @@ await humanizer.humanized_click(page, ".send-button")
 
 ### 4️⃣ 官方配额动态感知 (Official Rate Limit Awareness)
 
-Redis ZSET滑动窗口精准计数：
+SQLite 滑动窗口精准计数：
 
 - 实时监听官方3小时内的请求限制（如40次/3h）
 - 达到38次时自动冷却，智能负载均衡到其他账号
@@ -57,7 +57,7 @@ Redis ZSET滑动窗口精准计数：
 ### 5️⃣ 长会话内存熔断 (Memory Circuit Breaker)
 
 - 当单条对话交互超过40轮 **或** 进程内存超过1.5GB时触发
-- 物理删除该对话，刷新Redis映射
+- 物理删除该对话，刷新SQLite映射
 - 下次客户端再用该ID时，无感重建新对话
 
 ### 6️⃣ 异步URL捕获 (Async URL Capturing)
@@ -138,9 +138,9 @@ Redis ZSET滑动窗口精准计数：
          │ 获取Worker     │ 查询配额
          ▼                 ▼
     ┌──────────┐    ┌──────────────┐
-    │Browser   │    │ Redis ZSET   │
-    │Pool      │    │ Quota DB     │
-    │(5个Worker)   │              │
+    │Browser   │    │ SQLite       │
+    │Pool      │    │ Quota +      │
+    │(5个Worker)   │    │ Session DB   │
     └────┬─────┘    └──────────────┘
          │
    ┌─────┴─────────────────┬────────────────┐
@@ -160,8 +160,7 @@ Redis ZSET滑动窗口精准计数：
 | -------------------- | ------------------------- | --------------------------------------------- |
 | **网关层**     | FastAPI                   | 异步HTTP服务                                  |
 | **浏览器**     | Playwright + Chromium     | 浏览器自动化 (支持系统Chrome, Stealth反检测)  |
-| **缓存/队列**  | Redis (`redis.asyncio`) | 配额计数 + 会话映射 (可选，无Redis时独立运行) |
-| **数据持久化** | SQLite                    | 账号池 / 元数据                               |
+| **数据存储**   | SQLite                    | 配额计数 + 会话映射 + 账号池 + Cookie持久化   |
 | **日志**       | Loguru                    | 结构化日志                                    |
 
 ---
@@ -171,7 +170,6 @@ Redis ZSET滑动窗口精准计数：
 ### 前置条件
 
 - Python >= 3.10
-- Redis（可选，无 Redis 时以独立模式运行，会话管理/配额功能降级）
 - 系统已安装的 Chrome 浏览器（推荐）或通过 `playwright install chromium` 安装
 - Docker（可选，用于容器化部署）
 
@@ -193,7 +191,7 @@ playwright install chromium
 
 # 5. 配置环境变量
 cp .env.example .env
-# 编辑 .env 填入Redis地址等信息
+# 编辑 .env 填入配置信息
 ```
 
 ### 运行
@@ -201,7 +199,7 @@ cp .env.example .env
 ### Docker 部署
 
 ```bash
-# 一键启动（含 Redis）
+# 一键启动
 docker-compose up -d
 
 # 访问 Dashboard
