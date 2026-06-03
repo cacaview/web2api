@@ -21,18 +21,17 @@ async def main():
     ║  before running the full gateway.                     ║
     ╚════════════════════════════════════════════════════════╝
     """)
-    
+
     success = await run_all_tests()
-    
+
     if success:
         print("""
     ╔════════════════════════════════════════════════════════╗
     ║  ✅ All checks passed!                                ║
     ║                                                        ║
     ║  Next steps:                                          ║
-    ║  1. Start Redis: redis-server                         ║
-    ║  2. Run gateway: python main.py                       ║
-    ║  3. Test API: curl http://localhost:8000/health      ║
+    ║  1. Run gateway: python main.py                       ║
+    ║  2. Test API: curl http://localhost:8000/health      ║
     ║                                                        ║
     ║  📖 Full docs: https://github.com/web2api/web2api    ║
     ╚════════════════════════════════════════════════════════╝
@@ -44,12 +43,12 @@ async def main():
     ║  ❌ Some checks failed                                ║
     ║                                                        ║
     ║  Troubleshooting:                                     ║
-    ║  1. Check Redis is installed: redis-server --version ║
-    ║  2. Start Redis: redis-server                         ║
-    ║  3. Verify Gemini is accessible via browser          ║
-    ║  4. Check .env configuration                          ║
+    ║  1. Verify Gemini is accessible via browser          ║
+    ║  2. Check .env configuration                          ║
+    ║  3. Ensure Playwright browsers installed:             ║
+    ║     playwright install chromium                       ║
     ║                                                        ║
-    ║  📖 See DEPLOYMENT.md for detailed instructions      ║
+    ║  📖 See README.md for detailed instructions          ║
     ╚════════════════════════════════════════════════════════╝
         """)
         return 1

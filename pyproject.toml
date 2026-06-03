@@ -38,8 +38,8 @@ dev = [
     "mypy>=1.5.0",
 ]
 
-[tool.setuptools]
-packages = ["web2api"]
+[tool.setuptools.packages.find]
+include = ["web2api*"]
 
 [tool.black]
 line-length = 100

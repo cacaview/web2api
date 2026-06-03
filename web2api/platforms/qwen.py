@@ -1,4 +1,11 @@
-"""Qwen platform - qianwen.com (通义千问)"""
+"""Qwen platform - qianwen.com (通义千问)
+
+经 2026年6月 浏览器验证:
+- 输入框: contenteditable div (非 textarea)
+- 发送按钮: aria-label="发送消息" (非 "发送")
+- 新建对话: button "新建对话"
+- Guest 模式可访问页面，但需要登录才能发送消息
+"""
 
 from web2api.platforms.base import BaseAutomator
 
@@ -7,18 +14,16 @@ class QwenAutomator(BaseAutomator):
     PLATFORM_NAME = "qwen"
     URLS = {"base": "https://www.qianwen.com/", "new_chat": "https://www.qianwen.com/"}
     REQUIRES_LOGIN = True
-    SUPPORTS_GUEST = False  # Guest 可浏览但不能发消息
+    SUPPORTS_GUEST = False
 
     SELECTORS = {
         "input": [
-            'div.whitespace-pre-wrap[contenteditable]',
-            'div[class*="chat-input"] [contenteditable]',
             'div[contenteditable="true"][role="textbox"]',
+            'div.whitespace-pre-wrap[contenteditable]',
         ],
         "send": [
+            'button[aria-label="发送消息"]',
             'button[aria-label="发送"]',
-            'button[aria-label="Send"]',
-            'div[class*="send-btn"] button',
         ],
         "response": [
             'div[class*="message-content"]',
@@ -27,8 +32,6 @@ class QwenAutomator(BaseAutomator):
         ],
         "new_chat": [
             'button:has-text("新建对话")',
-            'a[href="/"]',
-            'div[class*="new-chat"]',
         ],
     }
 

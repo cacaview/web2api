@@ -239,6 +239,8 @@ class BaseAutomator:
                     if stable_count >= required_stable and current_text.strip():
                         self.response_buffer = current_text
                         self.is_streaming = False
+                        # 捕获对话 URL
+                        await self._capture_conversation_url()
                         logger.info(f"✅ [{self.PLATFORM_NAME}] Response ({len(current_text)} chars, {elapsed:.1f}s)")
                         return current_text
                 else:
@@ -248,11 +250,58 @@ class BaseAutomator:
             logger.warning(f"[{self.PLATFORM_NAME}] Timeout after {timeout_sec}s")
             self.response_buffer = last_text
             self.is_streaming = False
+            await self._capture_conversation_url()
             return last_text
         except Exception as e:
             logger.error(f"[{self.PLATFORM_NAME}] wait_for_response failed: {e}")
             self.is_streaming = False
             return self.response_buffer
+
+    async def stream_response(self, timeout_sec: float = 120):
+        """流式响应生成器 - 逐块 yield DOM 中新增的文本"""
+        try:
+            logger.debug(f"[{self.PLATFORM_NAME}] Streaming response...")
+            stable_count = 0
+            required_stable = 3
+            poll_interval = 0.5
+            last_text = ""
+            elapsed = 0.0
+
+            while elapsed < timeout_sec:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+
+                if int(elapsed) % 5 == 0 and int(elapsed) > 0:
+                    err = await self.detect_page_errors()
+                    if err and err.error_type in ("rate_limit", "banned", "captcha", "login_required"):
+                        self._last_error = err
+                        self.is_streaming = False
+                        return
+
+                current_text = await self._extract_response()
+
+                if current_text and current_text != last_text:
+                    stable_count = 0
+                    if current_text.startswith(last_text) and len(current_text) > len(last_text):
+                        delta = current_text[len(last_text):]
+                        if delta:
+                            yield delta
+                    else:
+                        if current_text.strip():
+                            yield current_text
+                    last_text = current_text
+                elif current_text and current_text == last_text:
+                    stable_count += 1
+                    if stable_count >= required_stable and current_text.strip():
+                        break
+
+            self.response_buffer = last_text
+            self.is_streaming = False
+            await self._capture_conversation_url()
+            logger.info(f"✅ [{self.PLATFORM_NAME}] Stream done ({len(last_text)} chars, {elapsed:.1f}s)")
+        except Exception as e:
+            logger.error(f"[{self.PLATFORM_NAME}] stream_response failed: {e}")
+            self.is_streaming = False
 
     async def _extract_response(self) -> str:
         """提取最新响应文本"""
@@ -270,17 +319,45 @@ class BaseAutomator:
         return ""
 
     async def check_for_errors(self) -> Optional[PlatformError]:
-        """检测页面错误"""
+        """检测页面错误 - 仅检查错误容器而非全页面文本，减少误判"""
         try:
-            page_text = await self.page.evaluate("() => document.body.innerText")
+            # 优先检查特定错误容器，避免全页面扫描导致误判
+            error_container_selectors = [
+                '[role="alert"]', '.error-message', '[class*="error"]',
+                '[class*="banner"]', '[class*="notification"]', '[class*="toast"]',
+                'mat-dialog-container', '[class*="modal"]',
+            ]
+            page_text = ""
+            for sel in error_container_selectors:
+                try:
+                    els = await self.page.query_selector_all(sel)
+                    for el in els:
+                        t = await el.inner_text()
+                        if t:
+                            page_text += " " + t
+                except Exception:
+                    pass
+
+            # 如果没有找到错误容器，回退到全页面但只取前500字符
+            if not page_text.strip():
+                page_text = await self.page.evaluate(
+                    "() => document.body?.innerText?.substring(0, 500) || ''"
+                )
+
             lower = page_text.lower()
 
-            priority = ["captcha", "banned", "rate_limit", "content_blocked", "login_required", "maintenance"]
+            priority = ["captcha", "banned", "rate_limit", "content_blocked", "maintenance"]
             for error_type in priority:
                 patterns = self.ERROR_PATTERNS.get(error_type, [])
                 for pattern in patterns:
                     if pattern.lower() in lower:
                         return self._classify_error(error_type, pattern, page_text[:500])
+
+            # login_required 单独检测 - 仅通过 URL 重定向判断，避免文本误判
+            url = self.page.url
+            if "accounts.google.com" in url or "/sorry" in url or "/blocked" in url:
+                return self._classify_error("login_required", "redirected to login", url[:500])
+
             return None
         except Exception:
             return None
@@ -349,6 +426,61 @@ class BaseAutomator:
 
     def get_conversation_id(self) -> Optional[str]:
         return self.conversation_url_id
+
+    async def navigate_to_conversation(self, conversation_url_id: str) -> bool:
+        """导航到已有对话（子类可覆写）"""
+        try:
+            base = self.URLS.get("base", "")
+            # 尝试拼接完整 URL 并导航
+            if conversation_url_id.startswith("http"):
+                url = conversation_url_id
+            elif base:
+                url = f"{base}/{conversation_url_id}"
+            else:
+                return False
+            logger.info(f"[{self.PLATFORM_NAME}] Navigating to conversation: {url}")
+            await self.page.goto(url, wait_until="domcontentloaded")
+            await asyncio.sleep(3)
+            return True
+        except Exception as e:
+            logger.error(f"[{self.PLATFORM_NAME}] navigate_to_conversation failed: {e}")
+            return False
+
+    async def delete_conversation(self) -> bool:
+        """删除当前对话（子类可覆写）"""
+        try:
+            logger.info(f"[{self.PLATFORM_NAME}] Deleting current conversation")
+            # 尝试通过 URL 重置到新对话
+            if "new_chat" in self.URLS:
+                await self.page.goto(self.URLS["new_chat"], wait_until="domcontentloaded")
+                await asyncio.sleep(2)
+                return True
+            return True
+        except Exception as e:
+            logger.error(f"[{self.PLATFORM_NAME}] delete_conversation failed: {e}")
+            return False
+
+    async def _capture_conversation_url(self):
+        """捕获当前对话的 URL 作为会话标识"""
+        try:
+            url = self.page.url
+            import re
+            match = re.search(r'/app/([a-f0-9]{10,})(?:\?|#|$)', url)
+            if not match:
+                match = re.search(r'/app/([a-f0-9]{10,})', url)
+            if not match:
+                match = re.search(r'/(?:c|chat)/([a-zA-Z0-9_-]+)', url)
+            if match:
+                self.conversation_url_id = match.group(1)
+                logger.debug(f"[{self.PLATFORM_NAME}] Captured conversation URL: {self.conversation_url_id}")
+            elif url and url != self.URLS.get("base", "") and url != "about:blank":
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                if parsed.path and parsed.path != "/":
+                    self.conversation_url_id = parsed.path.lstrip("/")
+                    logger.debug(f"[{self.PLATFORM_NAME}] Captured URL path: {self.conversation_url_id}")
+        except Exception as e:
+            logger.debug(f"[{self.PLATFORM_NAME}] Failed to capture conversation URL: {e}")
 
     async def _find_element(self, element_type: str):
         """查找页面元素"""

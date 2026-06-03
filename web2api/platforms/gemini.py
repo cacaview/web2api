@@ -1,6 +1,7 @@
 """Google Gemini platform - gemini.google.com"""
 
 import asyncio
+from loguru import logger
 from web2api.platforms.base import BaseAutomator
 
 
@@ -34,7 +35,7 @@ class GeminiAutomator(BaseAutomator):
         "rate_limit": ["rate limit", "too many requests", "已达到使用限制", "频率限制", "you have exceeded", "slow down"],
         "banned": ["suspended", "banned", "封禁", "账号已被停用", "account has been disabled"],
         "captcha": ["captcha", "验证码", "需要验证", "verify you are human"],
-        "login_required": ["sign in", "请登录", "session expired", "登录过期"],
+        "login_required": ["请登录", "session expired", "登录过期"],
         "content_blocked": ["blocked", "not available", "无法提供", "不支持", "content policy"],
         "maintenance": ["under maintenance", "维护中", "暂时不可用"],
     }
@@ -42,19 +43,17 @@ class GeminiAutomator(BaseAutomator):
     async def initialize(self) -> bool:
         """Gemini SPA 需要 networkidle 等待完整渲染"""
         try:
-            from loguru import logger as lg
-            lg.info(f"🚀 [{self.PLATFORM_NAME}] Initializing at {self.URLS['base']}")
+            logger.info(f"🚀 [{self.PLATFORM_NAME}] Initializing at {self.URLS['base']}")
             await self.page.goto(self.URLS["base"], wait_until="networkidle")
             await asyncio.sleep(3)
             accessible = await self._check_accessibility()
             if not accessible:
-                lg.error(f"❌ [{self.PLATFORM_NAME}] Not accessible")
+                logger.error(f"❌ [{self.PLATFORM_NAME}] Not accessible")
                 return False
-            lg.info(f"✅ [{self.PLATFORM_NAME}] Initialized successfully")
+            logger.info(f"✅ [{self.PLATFORM_NAME}] Initialized successfully")
             return True
         except Exception as e:
-            from loguru import logger as lg
-            lg.error(f"[{self.PLATFORM_NAME}] Init failed: {e}")
+            logger.error(f"[{self.PLATFORM_NAME}] Init failed: {e}")
             return False
 
     async def _check_accessibility(self) -> bool:
@@ -65,7 +64,6 @@ class GeminiAutomator(BaseAutomator):
     async def create_new_chat(self) -> bool:
         """Gemini 首次加载时新对话按钮 disabled，使用撰写按钮"""
         try:
-            # 尝试侧边栏按钮
             new_chat = await self.page.query_selector('a[aria-label="发起新对话"]')
             if new_chat:
                 is_disabled = await new_chat.get_attribute("aria-disabled")
@@ -74,17 +72,40 @@ class GeminiAutomator(BaseAutomator):
                     await asyncio.sleep(2)
                     return True
 
-            # 使用撰写按钮
             compose = await self._find_element("new_chat")
             if compose:
                 await self.page.click(self._cached_selectors.get("new_chat", 'button[aria-label*="撰写"]'))
                 await asyncio.sleep(2)
                 return True
 
-            # 已在 /app 页面
             return True
         except Exception:
             return True
+
+    async def navigate_to_conversation(self, conversation_url_id: str) -> bool:
+        """Gemini 导航到已有对话"""
+        try:
+            if conversation_url_id.startswith("http"):
+                url = conversation_url_id
+            else:
+                url = f"https://gemini.google.com/app/{conversation_url_id}"
+            logger.info(f"[gemini] Navigating to: {url}")
+            await self.page.goto(url, wait_until="networkidle")
+            await asyncio.sleep(3)
+            return True
+        except Exception as e:
+            logger.error(f"[gemini] navigate_to_conversation failed: {e}")
+            return False
+
+    async def delete_conversation(self) -> bool:
+        """Gemini 删除对话 - 通过导航到新对话页面"""
+        try:
+            await self.page.goto(self.URLS["new_chat"], wait_until="networkidle")
+            await asyncio.sleep(2)
+            return True
+        except Exception as e:
+            logger.error(f"[gemini] delete_conversation failed: {e}")
+            return False
 
     async def _extract_response(self) -> str:
         """Gemini 回复在 aria-live 区域"""

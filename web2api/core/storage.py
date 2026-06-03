@@ -22,6 +22,7 @@ class SQLiteStore:
         self.db_path = db_path or str(DB_PATH)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = None
+        self._lock = asyncio.Lock()
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -161,12 +162,15 @@ class SQLiteStore:
 
     def update_session(self, client_id: str, **kwargs):
         conn = self._get_conn()
+        valid_keys = {"web_chat_url_id", "interaction_count", "status"}
         sets = ["last_used_time=?"]
         vals = [time.time()]
         for k, v in kwargs.items():
-            if k in ("web_chat_url_id", "interaction_count", "status"):
+            if k in valid_keys:
                 sets.append(f"{k}=?")
                 vals.append(v)
+            else:
+                logger.warning(f"update_session: unknown field '{k}' ignored")
         vals.append(client_id)
         conn.execute(f"UPDATE sessions SET {', '.join(sets)} WHERE client_conversation_id=?", vals)
         conn.commit()

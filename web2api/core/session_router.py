@@ -56,9 +56,11 @@ class ConversationMetadata:
 class SessionRouter:
     """SQLite-based session router"""
 
-    def __init__(self, db, ttl_days: int = 3):
+    def __init__(self, db, ttl_days: int = 3, max_interactions: int = 40, memory_limit_mb: float = 1500):
         self.db = db
         self.ttl_days = ttl_days
+        self.max_interactions = max_interactions
+        self.memory_limit_mb = memory_limit_mb
 
     async def create_session(self, account_id: str) -> str:
         conv_id = str(uuid.uuid4())
@@ -88,7 +90,7 @@ class SessionRouter:
         if not data:
             return False
         count = data.get("interaction_count", 0)
-        if count >= 40 or memory_mb > 1500:
+        if count >= self.max_interactions or memory_mb > self.memory_limit_mb:
             self.db.update_session(client_conversation_id, status="memory_blown")
             return True
         return False

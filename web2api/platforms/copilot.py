@@ -16,9 +16,9 @@ class CopilotAutomator(BaseAutomator):
             'textarea[placeholder*="Copilot"]',
         ],
         "send": [
+            'button[data-testid="submit-button"]',
+            'button[aria-label="Submit message"]',
             'button[aria-label="Submit"]',
-            'button[aria-label="发送"]',
-            'button[data-testid="send-button"]',
         ],
         "response": [
             'div[class*="response"]',
@@ -26,15 +26,15 @@ class CopilotAutomator(BaseAutomator):
             'div[class*="markdown"]',
         ],
         "new_chat": [
-            'a[href="/"]',
-            'button:has-text("New topic")',
+            'button[data-testid="sidebar-new-conversation-nav-item"]',
+            'button[aria-label="New chat"]',
         ],
     }
 
     ERROR_PATTERNS = {
         "rate_limit": ["rate limit", "too many requests", "please slow down"],
         "banned": ["suspended", "banned", "account disabled"],
-        "captcha": ["captcha", "verify you are human"],
+        "captcha": ["captcha", "verify you are human", "checking your browser"],
         "login_required": ["session expired", "unauthorized", "please log in to continue"],
         "content_blocked": ["blocked", "content policy"],
         "maintenance": ["under maintenance", "temporarily unavailable"],

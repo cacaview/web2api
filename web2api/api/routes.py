@@ -12,9 +12,10 @@ import json
 import time
 import uuid
 from pathlib import Path
+from contextlib import asynccontextmanager
 from typing import Optional, AsyncGenerator
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from loguru import logger
 
@@ -23,6 +24,37 @@ from web2api.core.gateway import APIGateway
 from web2api.platforms import resolve_platform, PLATFORMS, MODEL_TO_PLATFORM
 
 DASHBOARD_PATH = Path(__file__).parent.parent / "web" / "dashboard.html"
+
+
+# ========== Auth ==========
+
+def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+    """从 Authorization: Bearer <token> 中提取 token"""
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return None
+
+
+async def require_admin_auth(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="X-Api-Key"),
+):
+    """管理端点认证依赖 — 未设置 API_KEY 时跳过验证"""
+    api_key = config.auth.api_key
+    if not api_key:
+        return  # 未配置 API_KEY，不启用认证
+
+    # 从 Bearer token 或 X-Api-Key header 中提取
+    token = _extract_bearer_token(authorization) or x_api_key
+    if token == api_key:
+        return  # 认证通过
+
+    logger.warning(f"🔒 Unauthorized admin access from {request.client.host if request.client else 'unknown'}")
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid or missing API key. Provide via 'Authorization: Bearer <key>' or 'X-Api-Key: <key>' header.",
+    )
 
 
 # ========== Pydantic Models ==========
@@ -57,28 +89,27 @@ class Usage(BaseModel):
 
 # ========== FastAPI App ==========
 
-app = FastAPI(
-    title="web2api",
-    description="AI Web Interface to OpenAI API Gateway",
-    version="1.3.0",
-)
-
 gateway: APIGateway = None
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global gateway
     gateway = APIGateway(config)
     await gateway.initialize()
     logger.info("🚀 Web2API Gateway started")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
+    yield
     if gateway:
         await gateway.shutdown()
     logger.info("🛑 Web2API Gateway stopped")
+
+
+app = FastAPI(
+    title="web2api",
+    description="AI Web Interface to OpenAI API Gateway",
+    version="1.3.0",
+    lifespan=lifespan,
+)
 
 
 # ========== Health ==========
@@ -168,28 +199,70 @@ def _extract_account_id(req: CompletionRequest, x_api_key: Optional[str]) -> str
     return "account_01"
 
 
-def _build_openai_response(result: dict, model: str) -> dict:
+def _estimate_tokens(text: str) -> int:
+    """估算 token 数: 中文约1.5字/token, 英文约4字符/token"""
+    if not text:
+        return 1
+    non_ascii = sum(1 for c in text if ord(c) > 127)
+    ascii_chars = len(text) - non_ascii
+    return max(1, int(non_ascii / 1.5 + ascii_chars / 4))
+
+
+def _build_message_from_history(messages: list, conversation_id: Optional[str] = None) -> str:
+    """从 OpenAI messages 数组构建发送给平台的消息文本"""
+    if not messages:
+        return ""
+
+    system_parts = []
+    last_user_msg = ""
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if not content:
+            continue
+        if role == "system":
+            system_parts.append(content)
+        elif role == "user":
+            last_user_msg = content
+
+    if not last_user_msg:
+        return ""
+
+    # 有 conversation_id 时浏览器已维持上下文，只发最后一条 user 消息
+    if conversation_id:
+        return last_user_msg
+
+    # 新会话：将 system 消息前置
+    if system_parts:
+        prefix = "\n\n".join(system_parts)
+        return f"[System Instructions]\n{prefix}\n[/System Instructions]\n\n{last_user_msg}"
+
+    return last_user_msg
+
+
+def _build_openai_response(result: dict, model: str, user_message: str = "") -> dict:
     """将内部结果转换为 OpenAI 格式"""
+    response_text = result.get("response", "")
+    prompt_tokens = _estimate_tokens(user_message)
+    completion_tokens = _estimate_tokens(response_text)
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    choice = CompletionChoice(
+        message={"role": "assistant", "content": response_text},
+    )
     return {
         "id": f"chatcmpl-{result.get('conversation_id', uuid.uuid4().hex[:8])}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": result["response"],
-                },
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": result.get("interaction_count", 0),
-            "completion_tokens": len(result.get("response", "").split()),
-            "total_tokens": result.get("interaction_count", 0) + len(result.get("response", "").split()),
-        },
+        "choices": [choice.model_dump()],
+        "usage": usage.model_dump(),
     }
 
 
@@ -218,51 +291,51 @@ async def _stream_response(
     model: str,
     platform: str = "gemini",
 ) -> AsyncGenerator[str, None]:
-    """SSE 流式响应生成器"""
+    """SSE 流式响应生成器 - 真正的 token-by-token 流式"""
     try:
-        result = await gateway.handle_message(conversation_id, message, account_id, platform)
+        conv_id = conversation_id or ""
+        async for event in gateway.stream_message(conversation_id, message, account_id, platform):
+            event_type = event.get("type")
 
-        if result["status"] == "error":
-            error_chunk = {
-                "error": {
-                    "message": result["error"],
-                    "type": "server_error",
-                    "code": result.get("http_status", 500),
+            if event_type == "delta":
+                content = event.get("content", "")
+                if content:
+                    conv_id = event.get("conversation_id", conv_id)
+                    yield _build_sse_chunk(content, conv_id, model)
+
+            elif event_type == "error":
+                error_chunk = {
+                    "error": {
+                        "message": event.get("message", "Unknown error"),
+                        "type": "server_error",
+                        "code": event.get("code", 500),
+                    }
                 }
-            }
-            yield f"data: {json.dumps(error_chunk)}\n\n"
-            yield "data: [DONE]\n\n"
-            return
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
-        if result["status"] == "rate_limited":
-            error_chunk = {
-                "error": {
-                    "message": "Rate limit exceeded",
-                    "type": "rate_limit_error",
-                    "code": 429,
+            elif event_type == "done":
+                conv_id = event.get("conversation_id", conv_id)
+                final_chunk = {
+                    "id": f"chatcmpl-{conv_id}",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop",
+                        }
+                    ],
                 }
-            }
-            yield f"data: {json.dumps(error_chunk)}\n\n"
-            yield "data: [DONE]\n\n"
-            return
+                yield f"data: {json.dumps(final_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
-        response_text = result.get("response", "")
-        conv_id = result.get("conversation_id", "")
-
-        # 模拟流式输出：逐段发送
-        chunk_size = 20
-        for i in range(0, len(response_text), chunk_size):
-            chunk = response_text[i : i + chunk_size]
-            yield _build_sse_chunk(chunk, conv_id, model)
-            # 微延迟模拟流式
-            import asyncio
-            await asyncio.sleep(0.02)
-
-        # 发送最终 chunk
-        yield _build_sse_chunk("", conv_id, model, finish_reason="stop")
-
-        # 在 stream 结束后携带 conversation_id
-        yield f"data: {json.dumps({'conversation_id': conv_id})}\n\n"
+        # 如果生成器正常结束但没有 done 事件
+        yield f"data: {json.dumps({'error': {'message': 'Stream ended unexpectedly', 'type': 'server_error'}})}\n\n"
         yield "data: [DONE]\n\n"
 
     except Exception as e:
@@ -284,20 +357,10 @@ async def openai_chat_completions(
     - 多轮对话 (通过 messages 数组或 user 字段传递 conversation_id)
     """
     try:
-        # 从 messages 中提取用户消息
-        user_message = ""
-        for msg in reversed(req.messages):
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                user_message = msg.get("content", "")
-                break
-
-        if not user_message:
-            raise HTTPException(status_code=400, detail="No user message found")
-
         account_id = _extract_account_id(req, x_api_key)
         platform = resolve_platform(req.model)
 
-        # 尝试从 user 字段提取 conversation_id（约定格式: "account_id:conversation_id"）
+        # 从 user 字段提取 conversation_id（约定格式: "account_id:conversation_id"）
         conversation_id = None
         if req.user and ":" in req.user:
             parts = req.user.split(":", 1)
@@ -305,6 +368,12 @@ async def openai_chat_completions(
             conversation_id = parts[1]
         elif req.user:
             account_id = req.user
+
+        # 从 messages 数组构建消息（支持 system 提示和多轮历史）
+        user_message = _build_message_from_history(req.messages, conversation_id)
+
+        if not user_message:
+            raise HTTPException(status_code=400, detail="No user message found")
 
         if req.stream:
             return StreamingResponse(
@@ -325,7 +394,7 @@ async def openai_chat_completions(
         if result["status"] == "rate_limited":
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-        return _build_openai_response(result, req.model)
+        return _build_openai_response(result, req.model, user_message)
 
     except HTTPException:
         raise
@@ -337,7 +406,7 @@ async def openai_chat_completions(
 # ========== Management ==========
 
 @app.get("/api/v1/stats")
-async def get_stats():
+async def get_stats(auth=Depends(require_admin_auth)):
     try:
         stats = gateway.get_gateway_stats()
         return {"status": "ok", "data": stats}
@@ -347,10 +416,10 @@ async def get_stats():
 
 
 @app.post("/api/v1/admin/quota/reset/{account_id}")
-async def reset_account_quota(account_id: str):
+async def reset_account_quota(account_id: str, auth=Depends(require_admin_auth)):
     try:
         if not gateway.quota_engine:
-            raise HTTPException(status_code=503, detail="Quota engine unavailable (no Redis)")
+            raise HTTPException(status_code=503, detail="Quota engine unavailable")
         await gateway.quota_engine.reset_account(account_id)
         return {"status": "ok", "message": f"Account {account_id} quota reset"}
     except HTTPException:
@@ -361,10 +430,10 @@ async def reset_account_quota(account_id: str):
 
 
 @app.get("/api/v1/admin/quota/status")
-async def get_all_quota_status():
+async def get_all_quota_status(auth=Depends(require_admin_auth)):
     try:
         if not gateway.quota_engine:
-            return {"status": "ok", "data": {}, "message": "Quota engine unavailable (no Redis)"}
+            return {"status": "ok", "data": {}, "message": "Quota engine unavailable"}
         status = await gateway.quota_engine.get_all_account_status()
         return {"status": "ok", "data": status}
     except Exception as e:
@@ -373,7 +442,7 @@ async def get_all_quota_status():
 
 
 @app.get("/api/v1/admin/accounts")
-async def get_account_pool_status():
+async def get_account_pool_status(auth=Depends(require_admin_auth)):
     """获取账号池状态"""
     try:
         stats = gateway.account_pool.get_pool_stats()
@@ -387,7 +456,7 @@ async def get_account_pool_status():
 
 
 @app.post("/api/v1/admin/accounts/{account_id}/cooldown")
-async def force_cooldown(account_id: str, minutes: int = 90):
+async def force_cooldown(account_id: str, minutes: int = 90, auth=Depends(require_admin_auth)):
     """手动将账号切入冷却"""
     acc = gateway.account_pool.get_account(account_id)
     if not acc:
@@ -397,7 +466,7 @@ async def force_cooldown(account_id: str, minutes: int = 90):
 
 
 @app.get("/api/v1/admin/sessions")
-async def list_sessions():
+async def list_sessions(auth=Depends(require_admin_auth)):
     """列出所有会话（用于 Dashboard）"""
     try:
         if gateway.session_router:
@@ -413,7 +482,7 @@ async def list_sessions():
 
 
 @app.post("/api/v1/admin/workers/{worker_id}/kill")
-async def kill_worker(worker_id: str):
+async def kill_worker(worker_id: str, auth=Depends(require_admin_auth)):
     """强制终止指定 Worker"""
     try:
         if worker_id not in gateway.browser_pool.workers:
@@ -428,7 +497,7 @@ async def kill_worker(worker_id: str):
 
 
 @app.get("/api/v1/admin/logs")
-async def list_logs(limit: int = 50):
+async def list_logs(limit: int = 50, auth=Depends(require_admin_auth)):
     """获取操作日志"""
     try:
         if gateway.db:
@@ -443,7 +512,7 @@ async def list_logs(limit: int = 50):
 # ========== Account CRUD ==========
 
 @app.post("/api/v1/admin/accounts/add")
-async def add_account(account_id: str, platform: str = "gemini", display_name: str = ""):
+async def add_account(account_id: str, platform: str = "gemini", display_name: str = "", auth=Depends(require_admin_auth)):
     """添加新账号"""
     try:
         if gateway.account_pool.get_account(account_id):
@@ -460,7 +529,7 @@ async def add_account(account_id: str, platform: str = "gemini", display_name: s
 
 
 @app.post("/api/v1/admin/accounts/batch-add")
-async def batch_add_accounts(platform: str, count: int = 5, prefix: str = ""):
+async def batch_add_accounts(platform: str, count: int = 5, prefix: str = "", auth=Depends(require_admin_auth)):
     """批量添加账号"""
     try:
         if count < 1 or count > 50:
@@ -477,7 +546,7 @@ async def batch_add_accounts(platform: str, count: int = 5, prefix: str = ""):
 
 
 @app.delete("/api/v1/admin/accounts/{account_id}")
-async def delete_account(account_id: str):
+async def delete_account(account_id: str, auth=Depends(require_admin_auth)):
     """删除账号"""
     try:
         acc = gateway.account_pool.get_account(account_id)
@@ -496,7 +565,7 @@ async def delete_account(account_id: str):
 
 
 @app.post("/api/v1/admin/accounts/{account_id}/reset")
-async def reset_account(account_id: str):
+async def reset_account(account_id: str, auth=Depends(require_admin_auth)):
     """重置账号状态为 Idle"""
     try:
         acc = gateway.account_pool.get_account(account_id)
@@ -514,7 +583,7 @@ async def reset_account(account_id: str):
 # ========== Session CRUD ==========
 
 @app.delete("/api/v1/admin/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, auth=Depends(require_admin_auth)):
     """删除会话"""
     try:
         if gateway.session_router:
@@ -531,7 +600,7 @@ async def delete_session(session_id: str):
 
 
 @app.delete("/api/v1/admin/sessions")
-async def clear_all_sessions():
+async def clear_all_sessions(auth=Depends(require_admin_auth)):
     """清空所有会话"""
     try:
         if gateway.db:
@@ -546,7 +615,7 @@ async def clear_all_sessions():
 # ========== Worker CRUD ==========
 
 @app.get("/api/v1/admin/workers")
-async def list_workers():
+async def list_workers(auth=Depends(require_admin_auth)):
     """列出所有 Worker 详情"""
     try:
         workers = {}
@@ -568,7 +637,7 @@ async def list_workers():
 # ========== Cookie Management ==========
 
 @app.post("/api/v1/admin/cookies/save")
-async def save_cookies(account_id: str, cookies: list, platform: str = "gemini"):
+async def save_cookies(account_id: str, cookies: list, platform: str = "gemini", auth=Depends(require_admin_auth)):
     """手动保存浏览器 Cookie（用于登录后注入 Session）"""
     try:
         if not gateway.db:
@@ -583,7 +652,7 @@ async def save_cookies(account_id: str, cookies: list, platform: str = "gemini")
 
 
 @app.get("/api/v1/admin/cookies/{account_id}")
-async def load_cookies(account_id: str):
+async def load_cookies(account_id: str, auth=Depends(require_admin_auth)):
     """查看已保存的 Cookie 信息"""
     try:
         if not gateway.db:
@@ -598,7 +667,7 @@ async def load_cookies(account_id: str):
 
 
 @app.delete("/api/v1/admin/cookies/{account_id}")
-async def delete_cookies(account_id: str):
+async def delete_cookies(account_id: str, auth=Depends(require_admin_auth)):
     """删除已保存的 Cookie"""
     try:
         if not gateway.db:
@@ -612,7 +681,7 @@ async def delete_cookies(account_id: str):
 
 
 @app.post("/api/v1/admin/workers/{worker_id}/save-cookies")
-async def save_worker_cookies(worker_id: str):
+async def save_worker_cookies(worker_id: str, auth=Depends(require_admin_auth)):
     """从运行中的 Worker 提取并保存 Cookie"""
     try:
         worker = gateway.browser_pool.workers.get(worker_id)
@@ -623,7 +692,7 @@ async def save_worker_cookies(worker_id: str):
         cookies = await worker.context.cookies()
         if not gateway.db:
             raise HTTPException(status_code=503, detail="No storage backend")
-        gateway.db.save_cookies(worker.account_id or worker_id, "unknown", cookies)
+        gateway.db.save_cookies(worker.account_id or worker_id, worker.platform, cookies)
         return {"status": "ok", "message": f"Saved {len(cookies)} cookies from worker {worker_id}"}
     except HTTPException:
         raise

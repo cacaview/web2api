@@ -34,7 +34,7 @@ class PerplexityAutomator(BaseAutomator):
     ERROR_PATTERNS = {
         "rate_limit": ["rate limit", "too many requests", "please slow down"],
         "banned": ["suspended", "banned"],
-        "captcha": ["captcha", "verify you are human"],
+        "captcha": ["captcha", "verify you are human", "checking your browser", "just a moment", "请验证您是真人"],
         "login_required": ["sign in", "log in", "session expired"],
         "content_blocked": ["blocked", "content policy"],
         "maintenance": ["under maintenance", "temporarily unavailable"],

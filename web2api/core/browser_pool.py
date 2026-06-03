@@ -4,6 +4,8 @@
 """
 
 import asyncio
+import os
+import platform
 import time
 from typing import Optional, Dict
 from enum import Enum
@@ -13,6 +15,44 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from web2api.config import BrowserConfig, TrafficInterceptConfig
 from web2api.core.traffic_interceptor import TrafficInterceptor, ContentDisabler
 from web2api.platforms.base import BaseAutomator
+
+
+def _detect_chrome_path() -> Optional[str]:
+    """自动检测系统 Chrome/Chromium 路径，优先使用 CHROME_PATH 环境变量"""
+    # 1. 环境变量优先
+    env_path = os.getenv("CHROME_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    # 2. 按操作系统检测
+    system = platform.system()
+    candidates = []
+    if system == "Windows":
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]
+    elif system == "Darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    else:  # Linux
+        candidates = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/snap/bin/chromium",
+        ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    # 3. 回退到 None（让 Playwright 自动选择 bundled Chromium）
+    return None
 
 
 # === 反自动化检测 Stealth 脚本 ===
@@ -99,10 +139,11 @@ class Worker:
     browser: Optional[Browser] = None
     context: Optional[BrowserContext] = None
     page: Optional[Page] = None
-    gemini: Optional[BaseAutomator] = None
+    automator: Optional[BaseAutomator] = None
 
     status: WorkerStatus = WorkerStatus.IDLE
     account_id: Optional[str] = None
+    platform: str = "gemini"
     conversation_id: Optional[str] = None
 
     created_at: float = field(default_factory=time.time)
@@ -131,7 +172,7 @@ class Worker:
             self.browser = None
             self.context = None
             self.page = None
-            self.gemini = None
+            self.automator = None
             self.status = WorkerStatus.DEAD
         except Exception as e:
             logger.error(f"Error cleaning up worker {self.id}: {e}")
@@ -229,15 +270,18 @@ class BrowserPool:
             worker_id = f"worker_{self.worker_counter}"
             logger.debug(f"🚀 Creating worker {worker_id}...")
 
-            browser = await self.playwright.chromium.launch(
-                headless=self.browser_config.headless,
-                executable_path=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                args=[
+            chrome_path = _detect_chrome_path()
+            launch_args = {
+                "headless": self.browser_config.headless,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],
-            )
+            }
+            if chrome_path:
+                launch_args["executable_path"] = chrome_path
+            browser = await self.playwright.chromium.launch(**launch_args)
 
             context = await browser.new_context(
                 viewport={
@@ -263,16 +307,29 @@ class BrowserPool:
                         page = await context.new_page()
                         await page.goto("about:blank")
                         for k, v in local_storage.items():
-                            await page.evaluate(f"localStorage.setItem('{k}', '{v}')")
+                            await page.evaluate(
+                                "([key, val]) => localStorage.setItem(key, val)",
+                                [k, v],
+                            )
                         logger.debug(f"🍪 Loaded {len(local_storage)} localStorage items")
 
             page = await context.new_page()
 
-            if self.traffic_config.enabled and platform == "gemini":
-                interceptor = TrafficInterceptor(self.traffic_config.block_patterns)
-                await page.route("**/*", interceptor.intercept_route)
-                await ContentDisabler.inject_blockers(page)
-                logger.debug(f"✅ Traffic interceptor enabled for {worker_id}")
+            if self.traffic_config.enabled:
+                if platform == "gemini":
+                    # Gemini: 全量拦截（图片、CSS、字体、埋点）
+                    interceptor = TrafficInterceptor(self.traffic_config.block_patterns)
+                    await page.route("**/*", interceptor.intercept_route)
+                    await ContentDisabler.inject_blockers(page)
+                else:
+                    # 其他平台: 仅拦截埋点和追踪脚本，保留 UI 资源
+                    analytics_patterns = [
+                        "*analytics*", "*sentry*", "*mixpanel*", "*datadog*",
+                        "*google-analytics*", "*track*", "*telemetry*",
+                    ]
+                    interceptor = TrafficInterceptor(analytics_patterns)
+                    await page.route("**/*", interceptor.intercept_route)
+                logger.debug(f"✅ Traffic interceptor enabled for {worker_id} (platform={platform})")
 
             page.set_default_timeout(self.browser_config.timeout_ms)
 
@@ -292,8 +349,9 @@ class BrowserPool:
                 browser=browser,
                 context=context,
                 page=page,
-                gemini=automator,
+                automator=automator,
                 account_id=account_id,
+                platform=platform,
                 status=WorkerStatus.BUSY,
                 pid=pid,
             )
@@ -317,7 +375,7 @@ class BrowserPool:
             try:
                 cookies = await worker.context.cookies()
                 if cookies:
-                    self._db.save_cookies(worker.account_id, "unknown", cookies)
+                    self._db.save_cookies(worker.account_id, worker.platform, cookies)
             except Exception as e:
                 logger.debug(f"Failed to save cookies for {worker.account_id}: {e}")
         worker.status = WorkerStatus.IDLE
@@ -361,9 +419,9 @@ class BrowserPool:
                 try:
                     await asyncio.sleep(interval_sec)
                     for w in list(self.workers.values()):
-                        if w.status == WorkerStatus.IDLE and w.gemini:
+                        if w.status == WorkerStatus.IDLE and w.automator:
                             try:
-                                await w.gemini.health_check()
+                                await w.automator.health_check()
                             except Exception as e:
                                 logger.warning(f"Health check failed for {w.id}: {e}")
                 except asyncio.CancelledError:
@@ -382,10 +440,10 @@ class BrowserPool:
             True 表示触发了熔断（Worker 被杀）
         """
         w = self.workers.get(worker_id)
-        if not w or not w.gemini:
+        if not w or not w.automator:
             return False
 
-        mem = await w.gemini.get_memory_usage()
+        mem = await w.automator.get_memory_usage()
         w.memory_usage_mb = mem
 
         if mem > limit_mb:

@@ -153,6 +153,12 @@ class DatabaseConfig:
 
 
 @dataclass
+class AuthConfig:
+    """认证配置"""
+    api_key: str = os.getenv("API_KEY", "")  # 为空则不启用认证
+
+
+@dataclass
 class AppConfig:
     """主应用配置"""
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
@@ -166,6 +172,7 @@ class AppConfig:
     traffic_intercept: TrafficInterceptConfig = field(default_factory=TrafficInterceptConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
     
     @classmethod
     def from_env(cls) -> "AppConfig":

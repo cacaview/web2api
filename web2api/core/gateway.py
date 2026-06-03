@@ -1,6 +1,6 @@
 """API Gateway - SQLite-only mode (no Redis dependency)"""
 
-from typing import Optional, Dict
+from typing import Optional, Dict, AsyncGenerator
 from datetime import datetime
 import asyncio
 import uuid
@@ -32,10 +32,12 @@ class APIGateway:
 
         # SQLite 存储
         self.db = get_store()
-        self._load_accounts_from_db()
 
         # 账号池
         self.account_pool = AccountPool(self.config.account_pool.accounts)
+
+        # 从 DB 恢复账号状态
+        self._load_accounts_from_db()
 
         # 浏览器池
         self.browser_pool = BrowserPool(self.config.browser, self.config.traffic_intercept)
@@ -43,7 +45,12 @@ class APIGateway:
         await self.browser_pool.initialize()
 
         # Session 路由 (SQLite)
-        self.session_router = SessionRouter(self.db, self.config.session.ttl_days)
+        self.session_router = SessionRouter(
+            self.db,
+            self.config.session.ttl_days,
+            self.config.session.max_interactions_per_session,
+            self.config.account_pool.memory_limit_mb,
+        )
 
         # 配额引擎 (SQLite)
         self.quota_engine = QuotaEngine(self.db, self.config.rate_limit)
@@ -85,8 +92,26 @@ class APIGateway:
             return
         try:
             for acc_data in self.db.get_all_accounts():
-                # SQLite accounts are loaded into pool during init
-                pass
+                account_id = acc_data["account_id"]
+                # 如果 AccountPool 中还没有这个账号，添加它
+                if self.account_pool and account_id not in self.account_pool.accounts:
+                    from web2api.core.account_pool import AccountInfo, AccountStatus
+                    import time as _time
+                    acc = AccountInfo(account_id, acc_data.get("platform", "gemini"))
+                    # 恢复状态
+                    status_str = acc_data.get("status", "Idle")
+                    try:
+                        acc.status = AccountStatus(status_str)
+                    except ValueError:
+                        acc.status = AccountStatus.IDLE
+                    acc.current_usage_3h = acc_data.get("current_usage_3h", 0)
+                    acc.cooldown_until = acc_data.get("cooldown_until", 0)
+                    acc.worker_id = acc_data.get("worker_id")
+                    # 如果冷却已过期，重置为 Idle
+                    if acc.status == AccountStatus.COOLDOWN and _time.time() >= acc.cooldown_until:
+                        acc.status = AccountStatus.IDLE
+                    self.account_pool.accounts[account_id] = acc
+                    logger.debug(f"📦 Restored account {account_id} from DB (status={acc.status.value})")
             logger.info(f"📦 Loaded accounts from SQLite")
         except Exception as e:
             logger.error(f"Failed to load accounts from DB: {e}")
@@ -147,6 +172,128 @@ class APIGateway:
             logger.error(f"Error handling message: {e}")
             return {"status": "error", "error": str(e), "http_status": 500}
 
+    async def stream_message(
+        self,
+        conversation_id: Optional[str],
+        message: str,
+        account_id: str,
+        platform: str = "gemini",
+    ) -> AsyncGenerator[dict, None]:
+        """流式消息处理 - yield 事件字典"""
+        worker = None
+        acc = None
+        try:
+            # 解析会话
+            is_new = not conversation_id
+            if conversation_id:
+                session = await self.session_router.get_session(conversation_id)
+                if session and session.status == ConversationStatus.DELETED:
+                    conversation_id = None
+                    is_new = True
+                elif session and session.status == ConversationStatus.MEMORY_BLOWN:
+                    await self.session_router.mark_expired(conversation_id)
+                    conversation_id = None
+                    is_new = True
+                elif session:
+                    account_id = session.bound_account_id
+
+            # 获取账号和 worker
+            if is_new:
+                acc = self.account_pool.select_account(account_id, platform)
+                if not acc:
+                    yield {"type": "error", "message": "No available accounts", "code": 503}
+                    return
+                account_id = acc.account_id
+                quota = await self.quota_engine.check_quota(account_id)
+                if not quota["is_available"]:
+                    acc.set_cooldown(self.config.rate_limit.cooldown_minutes)
+                    yield {"type": "error", "message": f"Account {account_id} rate limited", "code": 429}
+                    return
+            else:
+                session = await self.session_router.get_session(conversation_id)
+                if not session or not session.web_chat_url_id:
+                    yield {"type": "error", "message": "Session not found", "code": 404}
+                    return
+                account_id = session.bound_account_id
+                quota = await self.quota_engine.check_quota(account_id)
+                if not quota["is_available"]:
+                    yield {"type": "error", "message": f"Account {account_id} rate limited", "code": 429}
+                    return
+                acc = self.account_pool.get_account(account_id)
+                if not acc:
+                    acc = self.account_pool.select_account(platform=platform)
+                    if not acc:
+                        yield {"type": "error", "message": "No available accounts", "code": 503}
+                        return
+                    account_id = acc.account_id
+
+            worker = await self.browser_pool.acquire_worker(account_id, platform)
+            if not worker:
+                yield {"type": "error", "message": "No available workers", "code": 503}
+                return
+            acc.set_busy(worker.id)
+            yield {"type": "status", "message": "connected"}
+
+            # 初始化和发送
+            if is_new:
+                if not await worker.automator.initialize():
+                    yield {"type": "error", "message": f"Failed to initialize {platform}", "code": 500}
+                    return
+                if not await worker.automator.create_new_chat():
+                    yield {"type": "error", "message": "Failed to create new chat", "code": 500}
+                    return
+            else:
+                session = await self.session_router.get_session(conversation_id)
+                if not await worker.automator.navigate_to_conversation(session.web_chat_url_id):
+                    yield {"type": "error", "message": "Failed to navigate to conversation", "code": 500}
+                    return
+
+            if not await worker.automator.send_message(message):
+                yield {"type": "error", "message": "Failed to send message", "code": 500}
+                return
+
+            # 流式读取响应
+            conv_id = conversation_id or ""
+            async for delta in worker.automator.stream_response():
+                yield {"type": "delta", "content": delta, "conversation_id": conv_id}
+
+            # 错误检查
+            platform_error = await worker.automator.check_for_errors()
+            if not platform_error:
+                platform_error = worker.automator.get_last_error()
+            if platform_error:
+                yield {"type": "error", "message": platform_error.message, "code": 500}
+                return
+
+            # 会话管理和配额
+            if is_new:
+                web_url_id = worker.automator.get_conversation_id() or ""
+                conv_id = await self.session_router.create_session(account_id)
+                if web_url_id:
+                    await self.session_router.update_web_url(conv_id, web_url_id)
+            else:
+                conv_id = conversation_id
+
+            count = await self.session_router.update_interaction_count(conv_id)
+            await self.quota_engine.record_request(account_id, f"req_{conv_id}_{count}")
+
+            mem = await worker.automator.get_memory_usage()
+            worker.memory_usage_mb = mem
+            should_blow = await self.session_router.check_memory_limit(conv_id, mem)
+            if should_blow:
+                await self._trigger_meltdown(worker, conv_id)
+
+            yield {"type": "done", "conversation_id": conv_id}
+
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            yield {"type": "error", "message": str(e), "code": 500}
+        finally:
+            if worker:
+                await self._safe_release(worker, acc)
+            if acc:
+                self._persist_account(account_id)
+
     async def _handle_new_session(self, message: str, account_id: str, platform: str = "gemini") -> Dict:
         # 1. 选择账号
         acc = self.account_pool.select_account(account_id, platform)
@@ -168,29 +315,29 @@ class APIGateway:
 
         try:
             # 4. 初始化
-            if not await worker.gemini.initialize():
+            if not await worker.automator.initialize():
                 return {"status": "error", "error": f"Failed to initialize {platform}", "http_status": 500}
 
             # 5. 新建对话
-            if not await worker.gemini.create_new_chat():
+            if not await worker.automator.create_new_chat():
                 return {"status": "error", "error": "Failed to create new chat", "http_status": 500}
 
             # 6. 发送消息
-            if not await worker.gemini.send_message(message):
+            if not await worker.automator.send_message(message):
                 return {"status": "error", "error": "Failed to send message", "http_status": 500}
 
             # 7. 等待响应
-            response = await worker.gemini.wait_for_response()
+            response = await worker.automator.wait_for_response()
 
             # 8. 检查错误
-            gemini_error = await worker.gemini.check_for_errors()
+            gemini_error = await worker.automator.check_for_errors()
             if not gemini_error:
-                gemini_error = worker.gemini.get_last_error()
+                gemini_error = worker.automator.get_last_error()
             if gemini_error:
                 return await self._handle_platform_error(gemini_error, worker, acc, account_id)
 
             # 9. 创建会话
-            web_url_id = worker.gemini.get_conversation_id() or ""
+            web_url_id = worker.automator.get_conversation_id() or ""
             conv_id = await self.session_router.create_session(account_id)
             if web_url_id:
                 await self.session_router.update_web_url(conv_id, web_url_id)
@@ -200,7 +347,7 @@ class APIGateway:
             quota_info = await self.quota_engine.record_request(account_id, f"req_{conv_id}_{count}")
 
             # 11. 内存检查
-            mem = await worker.gemini.get_memory_usage()
+            mem = await worker.automator.get_memory_usage()
             worker.memory_usage_mb = mem
             should_blow = await self.session_router.check_memory_limit(conv_id, mem)
             if should_blow:
@@ -251,24 +398,24 @@ class APIGateway:
         acc.set_busy(worker.id)
 
         try:
-            if not await worker.gemini.navigate_to_conversation(session.web_chat_url_id):
+            if not await worker.automator.navigate_to_conversation(session.web_chat_url_id):
                 return {"status": "error", "error": "Failed to navigate to conversation", "http_status": 500}
 
-            mem = await worker.gemini.get_memory_usage()
+            mem = await worker.automator.get_memory_usage()
             worker.memory_usage_mb = mem
             if mem > self.config.account_pool.memory_limit_mb:
                 await self.browser_pool.kill_worker(worker.id)
                 await self.session_router.mark_expired(conversation_id)
                 return {"status": "error", "error": "Memory circuit breaker triggered", "http_status": 500}
 
-            if not await worker.gemini.send_message(message):
+            if not await worker.automator.send_message(message):
                 return {"status": "error", "error": "Failed to send message", "http_status": 500}
 
-            response = await worker.gemini.wait_for_response()
+            response = await worker.automator.wait_for_response()
 
-            gemini_error = await worker.gemini.check_for_errors()
+            gemini_error = await worker.automator.check_for_errors()
             if not gemini_error:
-                gemini_error = worker.gemini.get_last_error()
+                gemini_error = worker.automator.get_last_error()
             if gemini_error:
                 return await self._handle_platform_error(gemini_error, worker, acc, account_id)
 
@@ -301,7 +448,7 @@ class APIGateway:
     async def _trigger_meltdown(self, worker, conversation_id: str):
         logger.warning(f"🔥 Memory meltdown triggered for {conversation_id}")
         try:
-            await worker.gemini.delete_conversation()
+            await worker.automator.delete_conversation()
         except Exception:
             pass
         await self.session_router.mark_expired(conversation_id)

@@ -2,8 +2,7 @@
 
 import asyncio
 import random
-import math
-from typing import Tuple, List, Optional
+from typing import List
 from loguru import logger
 
 
@@ -128,15 +127,36 @@ class GaussianHumanizer:
         target_x = box['x'] + box['width'] / 2
         target_y = box['y'] + box['height'] / 2
         
-        # 从当前位置（通常是0,0或上次位置）移动到目标位置
-        # 带贝塞尔曲线平滑过渡
+        # 从当前位置移动到目标位置，使用贝塞尔曲线分步移动
         move_duration = random.uniform(move_delay_min, move_delay_max)
-        
+
         logger.debug(f"🖱️  Moving to ({target_x:.0f}, {target_y:.0f})")
-        
-        # 简化版：直接moveTo（Playwright不支持中间路径追踪）
-        await page.mouse.move(target_x, target_y)
-        await asyncio.sleep(move_duration / 1000)
+
+        # 贝塞尔曲线分步移动
+        start_x, start_y = 0, 0
+        try:
+            # 尝试获取当前鼠标位置
+            pos = await page.evaluate("() => ({ x: window._lastMouseX || 0, y: window._lastMouseY || 0 })")
+            start_x, start_y = pos.get("x", 0), pos.get("y", 0)
+        except Exception:
+            pass
+
+        steps = random.randint(8, 15)
+        x_curve = GaussianHumanizer.bezier_curve(start_x, target_x, steps)
+        y_curve = GaussianHumanizer.bezier_curve(start_y, target_y, steps)
+
+        step_delay = move_duration / steps / 1000
+        for sx, sy in zip(x_curve, y_curve):
+            await page.mouse.move(sx, sy)
+            await asyncio.sleep(step_delay + random.uniform(-0.005, 0.005))
+
+        # 记录最终位置供下次使用
+        try:
+            await page.evaluate(
+                f"() => {{ window._lastMouseX = {target_x}; window._lastMouseY = {target_y}; }}"
+            )
+        except Exception:
+            pass
         
         # 点击
         await page.mouse.click(target_x, target_y)

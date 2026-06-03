@@ -469,8 +469,8 @@ async function loadSessions() {
   const d = await fetchJSON('/api/v1/admin/sessions');
   if (!d) return;
   const ss = d.sessions || [];
-  document.getElementById('sSessions').textContent = ss.length;
-  document.getElementById('sSessionsSub').textContent = ss.filter(s=>s.status==='active').length + ' 个活跃';
+  document.getElementById('sSessions').textContent = ss.filter(s=>s.status==='active').length;
+  document.getElementById('sSessionsSub').textContent = ss.length + ' 个总数';
   const emptyHtml = '<div class="empty">暂无会话</div>';
   if (!ss.length) {
     document.getElementById('sessionsTable').innerHTML = emptyHtml;
