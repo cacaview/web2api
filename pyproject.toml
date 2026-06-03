@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web2api"
+version = "1.3.0"
+description = "AI Web Interface to OpenAI API Gateway with Browser Automation and Gemini Guest Mode"
+authors = [
+    {name = "Web2API Team", email = "support@web2api.dev"}
+]
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["openai", "api", "gateway", "browser-automation", "gemini", "chatgpt"]
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "playwright>=1.40.0",
+    "pydantic>=2.0",
+    "redis>=5.0.0",
+    "sqlalchemy>=2.0.0",
+    "pyyaml>=6.0",
+    "httpx>=0.25.0",
+    "websockets>=12.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "tenacity>=8.2.0",
+    "aiofiles>=23.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.0.280",
+    "mypy>=1.5.0",
+]
+
+[tool.setuptools]
+packages = ["web2api"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+select = ["E", "F", "I"]
+line-length = 100

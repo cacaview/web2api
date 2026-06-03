@@ -1,0 +1,37 @@
+PRD.md
+*__pycache__*
+*.pyc
+*.pyo
+web2api.egg-info/
+
+# Debug files
+diagnose_*.py
+deep_diagnose_*.py
+test_selectors.py
+buttons_info.json
+gemini_selectors.json
+
+# Data & Logs
+data/
+logs/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml

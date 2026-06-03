@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web2API 管理面板</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#20a53a;--primary-light:#e8f5e9;--primary-dark:#1a8a30;
+  --blue:#1e9fff;--blue-light:#e3f2fd;
+  --red:#e74c3c;--red-light:#fdecea;
+  --orange:#f39c12;--orange-light:#fef9e7;
+  --purple:#9b59b6;--purple-light:#f4ecf7;
+  --bg:#f0f2f5;--surface:#fff;--border:#e8e8e8;
+  --text:#333;--text-secondary:#666;--text-dim:#999;
+  --sidebar-bg:#fff;--sidebar-width:200px;
+  --header-height:50px;
+  --radius:4px;--shadow:0 1px 4px rgba(0,0,0,.08);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.6;font-size:13px}
+
+/* ===== Layout ===== */
+.layout{display:flex;min-height:100vh}
+.sidebar{width:var(--sidebar-width);background:var(--sidebar-bg);border-right:1px solid var(--border);
+  position:fixed;top:0;left:0;bottom:0;z-index:100;display:flex;flex-direction:column}
+.main{margin-left:var(--sidebar-width);flex:1;min-width:0}
+
+/* ===== Sidebar ===== */
+.sidebar-logo{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.sidebar-logo .icon{width:32px;height:32px;background:var(--primary);border-radius:6px;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px}
+.sidebar-logo .text{font-size:15px;font-weight:600;color:var(--text)}
+.sidebar-logo .ver{font-size:11px;color:var(--text-dim)}
+
+.nav{flex:1;padding:8px 0}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer;
+  color:var(--text-secondary);font-size:13px;transition:all .15s;border-left:3px solid transparent}
+.nav-item:hover{background:var(--primary-light);color:var(--primary)}
+.nav-item.active{background:var(--primary-light);color:var(--primary);border-left-color:var(--primary);font-weight:500}
+.nav-item .ico{width:18px;text-align:center;font-size:14px}
+.nav-section{padding:12px 16px 6px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px}
+
+.sidebar-footer{padding:12px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--text-dim);text-align:center}
+
+/* ===== Header ===== */
+.header{height:var(--header-height);background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:50}
+.header-title{font-size:14px;font-weight:500;color:var(--text)}
+.header-right{display:flex;align-items:center;gap:14px}
+.status-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:12px;font-size:12px}
+.status-badge.ok{background:var(--primary-light);color:var(--primary)}
+.status-badge.err{background:var(--red-light);color:var(--red)}
+.status-badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.refresh-info{font-size:12px;color:var(--text-dim)}
+.toggle{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-secondary);cursor:pointer}
+.toggle input{accent-color:var(--primary)}
+
+/* ===== Content ===== */
+.content{padding:16px 20px}
+.page{display:none}
+.page.active{display:block}
+
+/* ===== Stat Cards ===== */
+.stat-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px 16px;display:flex;align-items:center;gap:12px}
+.stat-icon{width:42px;height:42px;border-radius:8px;display:flex;align-items:center;
+  justify-content:center;font-size:18px;flex-shrink:0}
+.stat-icon.blue{background:var(--blue-light);color:var(--blue)}
+.stat-icon.green{background:var(--primary-light);color:var(--primary)}
+.stat-icon.orange{background:var(--orange-light);color:var(--orange)}
+.stat-icon.purple{background:var(--purple-light);color:var(--purple)}
+.stat-icon.red{background:var(--red-light);color:var(--red)}
+.stat-info{min-width:0}
+.stat-label{font-size:12px;color:var(--text-dim);margin-bottom:2px}
+.stat-value{font-size:22px;font-weight:600;color:var(--text);line-height:1.2}
+.stat-sub{font-size:11px;color:var(--text-dim);margin-top:2px}
+
+/* ===== Panel ===== */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px}
+.panel-head{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;border-bottom:1px solid var(--border)}
+.panel-title{font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px}
+.panel-title .dot{width:3px;height:14px;border-radius:2px;background:var(--primary)}
+.panel-actions{display:flex;gap:6px}
+
+/* ===== Tables ===== */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 14px;color:var(--text-dim);font-weight:500;font-size:12px;
+  background:#fafafa;border-bottom:1px solid var(--border)}
+td{padding:8px 14px;border-bottom:1px solid #f5f5f5}
+tr:hover{background:#fafafa}
+tr:last-child td{border-bottom:none}
+
+/* ===== Badges ===== */
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:500}
+.badge-green{background:var(--primary-light);color:var(--primary)}
+.badge-blue{background:var(--blue-light);color:var(--blue)}
+.badge-orange{background:var(--orange-light);color:var(--orange)}
+.badge-red{background:var(--red-light);color:var(--red)}
+.badge-gray{background:#f5f5f5;color:var(--text-dim)}
+.badge-purple{background:var(--purple-light);color:var(--purple)}
+
+/* ===== Progress ===== */
+.progress{width:100px;height:6px;background:#f0f0f0;border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
+.progress-fill{height:100%;border-radius:3px;transition:width .3s}
+.progress-fill.low{background:var(--primary)}
+.progress-fill.mid{background:var(--orange)}
+.progress-fill.high{background:var(--red)}
+
+/* ===== Buttons ===== */
+.btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:3px;
+  font-size:12px;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);
+  cursor:pointer;transition:all .15s;line-height:1.4}
+.btn:hover{border-color:var(--primary);color:var(--primary)}
+.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-primary:hover{background:var(--primary-dark)}
+.btn-danger{color:var(--red);border-color:#f5c6cb}
+.btn-danger:hover{background:var(--red-light);border-color:var(--red)}
+.btn-sm{padding:2px 7px;font-size:11px}
+
+/* ===== Chat ===== */
+.chat-wrap{display:grid;grid-template-columns:1fr 1fr;gap:0;height:320px}
+.chat-left{display:flex;flex-direction:column;border-right:1px solid var(--border)}
+.chat-messages{flex:1;overflow-y:auto;padding:12px;font-size:13px}
+.chat-msg{margin-bottom:8px;padding:6px 10px;border-radius:4px;max-width:85%;font-size:12px;line-height:1.5}
+.chat-msg.user{background:var(--primary);color:#fff;margin-left:auto}
+.chat-msg.assistant{background:#f5f5f5;border:1px solid var(--border)}
+.chat-msg.error{background:var(--red-light);color:var(--red);border:1px solid #f5c6cb}
+.chat-form{display:flex;gap:6px;padding:10px;border-top:1px solid var(--border)}
+.chat-form input,.chat-form select{background:var(--surface);border:1px solid var(--border);color:var(--text);
+  padding:5px 8px;border-radius:3px;font-size:12px;outline:none}
+.chat-form input:focus,.chat-form select:focus{border-color:var(--primary)}
+.chat-form input{flex:1}
+.chat-form select{min-width:110px}
+.chat-preview{padding:12px;font-size:12px;color:var(--text-dim)}
+.chat-preview pre{background:#f8f8f8;border:1px solid var(--border);border-radius:3px;
+  padding:10px;margin-top:6px;overflow:auto;max-height:260px;font-size:11px;color:var(--text);
+  font-family:'Cascadia Code','Consolas',monospace}
+
+/* ===== Log ===== */
+.log-area{max-height:200px;overflow-y:auto;padding:10px 14px;font-family:'Cascadia Code','Consolas',monospace;
+  font-size:12px;line-height:1.7;background:#fafafa;border-radius:0 0 var(--radius) var(--radius)}
+.log-line{padding:1px 0}
+.log-line .ts{color:var(--text-dim);margin-right:6px}
+.log-line.info{color:var(--blue)}
+.log-line.warn{color:var(--orange)}
+.log-line.error{color:var(--red)}
+.log-line.ok{color:var(--primary)}
+
+/* ===== Empty ===== */
+.empty{text-align:center;padding:30px;color:var(--text-dim);font-size:13px}
+.empty .ico{font-size:28px;margin-bottom:6px;opacity:.4}
+
+/* ===== Grid layouts ===== */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+
+/* ===== Responsive ===== */
+@media(max-width:900px){
+  .sidebar{display:none}
+  .main{margin-left:0}
+  .stat-row{grid-template-columns:repeat(2,1fr)}
+  .grid-2{grid-template-columns:1fr}
+  .chat-wrap{grid-template-columns:1fr;height:auto}
+  .chat-left{border-right:none;border-bottom:1px solid var(--border)}
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#ddd;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#bbb}
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">W2</div>
+      <div><div class="text">Web2API</div><div class="ver">v1.3.0</div></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-section">监控</div>
+      <div class="nav-item active" onclick="switchPage('overview',this)"><span class="ico">&#9632;</span>运行概览</div>
+      <div class="nav-item" onclick="switchPage('accounts',this)"><span class="ico">&#9733;</span>账号管理</div>
+      <div class="nav-item" onclick="switchPage('workers',this)"><span class="ico">&#9881;</span>浏览器节点</div>
+      <div class="nav-item" onclick="switchPage('sessions',this)"><span class="ico">&#9993;</span>会话列表</div>
+      <div class="nav-section">工具</div>
+      <div class="nav-item" onclick="switchPage('chat',this)"><span class="ico">&#9998;</span>快速测试</div>
+      <div class="nav-item" onclick="switchPage('log',this)"><span class="ico">&#9776;</span>操作日志</div>
+    </nav>
+    <div class="sidebar-footer">Web2API Gateway</div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="header">
+      <div class="header-title">运行概览</div>
+      <div class="header-right">
+        <span class="refresh-info" id="lastRefresh">--</span>
+        <label class="toggle"><input type="checkbox" id="autoRefresh" checked> 自动刷新</label>
+        <select id="refreshInterval" style="border:1px solid var(--border);border-radius:3px;padding:2px 4px;font-size:12px;background:var(--surface)">
+          <option value="3">3s</option><option value="5" selected>5s</option><option value="10">10s</option><option value="30">30s</option>
+        </select>
+        <span class="status-badge ok" id="connBadge"><span class="dot"></span>已连接</span>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ====== Page: 运行概览 ====== -->
+      <div class="page active" id="page-overview">
+        <div class="stat-row">
+          <div class="stat-card">
+            <div class="stat-icon blue">&#9776;</div>
+            <div class="stat-info"><div class="stat-label">浏览器节点</div><div class="stat-value" id="sWorkers">-</div><div class="stat-sub" id="sWorkersSub">--</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon green">&#9733;</div>
+            <div class="stat-info"><div class="stat-label">账号池</div><div class="stat-value" id="sAccounts">-</div><div class="stat-sub" id="sAccountsSub">--</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon orange">&#9993;</div>
+            <div class="stat-info"><div class="stat-label">活跃会话</div><div class="stat-value" id="sSessions">-</div><div class="stat-sub" id="sSessionsSub">--</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon purple">&#9881;</div>
+            <div class="stat-info"><div class="stat-label">内存占用</div><div class="stat-value" id="sMemory">-</div><div class="stat-sub" id="sMemorySub">--</div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon red">&#9878;</div>
+            <div class="stat-info"><div class="stat-label">池容量</div><div class="stat-value" id="sPool">-</div><div class="stat-sub" id="sPoolSub">--</div></div>
+          </div>
+        </div>
+        <div class="panel" style="margin-bottom:16px">
+          <div class="panel-head"><div class="panel-title"><span class="dot"></span>支持平台</div></div>
+          <div id="platformsOverview"><div class="empty">加载中...</div></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head"><div class="panel-title"><span class="dot"></span>浏览器节点</div></div>
+            <div id="workersOverview"><div class="empty">加载中...</div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div class="panel-title"><span class="dot"></span>最近会话</div></div>
+            <div id="sessionsOverview"><div class="empty">加载中...</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ====== Page: 账号管理 ====== -->
+      <div class="page" id="page-accounts">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot"></span>账号管理</div>
+            <div class="panel-actions">
+              <button class="btn btn-primary btn-sm" onclick="showAddAccount()">+ 添加</button>
+              <button class="btn btn-sm" onclick="showBatchAdd()">+ 批量添加</button>
+              <button class="btn btn-sm" onclick="loadAccounts()">刷新</button>
+            </div>
+          </div>
+          <!-- 单个添加表单 -->
+          <div id="addAccountForm" style="display:none;padding:12px 16px;border-bottom:1px solid var(--border);background:#fafafa">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select id="addPlatform" style="border:1px solid var(--border);border-radius:3px;padding:4px 8px;font-size:12px">
+                <option value="gemini">Gemini</option><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option>
+                <option value="deepseek">DeepSeek</option><option value="doubao">豆包</option><option value="glm">智谱清言</option>
+                <option value="copilot">Copilot</option><option value="kimi">Kimi</option><option value="qwen">千问</option>
+                <option value="yuanbao">元宝</option><option value="perplexity">Perplexity</option><option value="grok">Grok</option>
+              </select>
+              <input type="text" id="newAccountId" placeholder="账号ID" style="border:1px solid var(--border);border-radius:3px;padding:4px 8px;font-size:12px;width:150px">
+              <input type="text" id="newAccountName" placeholder="显示名(可选)" style="border:1px solid var(--border);border-radius:3px;padding:4px 8px;font-size:12px;width:120px">
+              <button class="btn btn-primary btn-sm" onclick="addAccount()">确认</button>
+              <button class="btn btn-sm" onclick="hideForms()">取消</button>
+            </div>
+          </div>
+          <!-- 批量添加表单 -->
+          <div id="batchAddForm" style="display:none;padding:12px 16px;border-bottom:1px solid var(--border);background:#fafafa">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select id="batchPlatform" style="border:1px solid var(--border);border-radius:3px;padding:4px 8px;font-size:12px">
+                <option value="gemini">Gemini</option><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option>
+                <option value="deepseek">DeepSeek</option><option value="doubao">豆包</option><option value="glm">智谱清言</option>
+                <option value="copilot">Copilot</option><option value="kimi">Kimi</option><option value="qwen">千问</option>
+                <option value="yuanbao">元宝</option><option value="perplexity">Perplexity</option><option value="grok">Grok</option>
+              </select>
+              <input type="number" id="batchCount" value="5" min="1" max="50" style="border:1px solid var(--border);border-radius:3px;padding:4px 8px;font-size:12px;width:60px">
+              <span style="font-size:12px;color:var(--text-dim)">个账号</span>
+              <input type="text" id="batchPrefix" placeholder="前缀(可选)" style="border:1px solid var(--border);border-radius:3px;padding:4px 8px;font-size:12px;width:100px">
+              <button class="btn btn-primary btn-sm" onclick="batchAdd()">批量添加</button>
+              <button class="btn btn-sm" onclick="hideForms()">取消</button>
+            </div>
+          </div>
+          <div id="accountsTable"><div class="empty">加载中...</div></div>
+        </div>
+      </div>
+
+      <!-- ====== Page: 浏览器节点 ====== -->
+      <div class="page" id="page-workers">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot"></span>浏览器节点</div>
+            <div class="panel-actions"><button class="btn btn-sm" onclick="loadWorkersDetail()">刷新</button></div>
+          </div>
+          <div id="workersTable"><div class="empty">加载中...</div></div>
+        </div>
+      </div>
+
+      <!-- ====== Page: 会话列表 ====== -->
+      <div class="page" id="page-sessions">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot"></span>会话列表</div>
+            <div class="panel-actions">
+              <button class="btn btn-sm btn-danger" onclick="clearAllSessions()">清空全部</button>
+              <button class="btn btn-sm" onclick="loadSessionsDetail()">刷新</button>
+            </div>
+          </div>
+          <div id="sessionsTable"><div class="empty">加载中...</div></div>
+        </div>
+      </div>
+
+      <!-- ====== Page: 快速测试 ====== -->
+      <div class="page" id="page-chat">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot"></span>快速测试</div>
+          </div>
+          <div class="chat-wrap">
+            <div class="chat-left">
+              <div class="chat-messages" id="chatMessages"><div class="empty">选择账号并输入消息进行测试</div></div>
+              <div class="chat-form">
+                <select id="chatPlatform" style="min-width:80px">
+                  <option value="gemini">Gemini</option>
+                  <option value="chatgpt">ChatGPT</option>
+                  <option value="claude">Claude</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="doubao">豆包</option>
+                  <option value="glm">智谱清言</option>
+                  <option value="copilot">Copilot</option>
+                  <option value="kimi">Kimi</option>
+                  <option value="qwen">千问</option>
+                  <option value="yuanbao">元宝</option>
+                  <option value="perplexity">Perplexity</option>
+                  <option value="grok">Grok</option>
+                </select>
+                <select id="chatAccount"><option value="">选择账号</option></select>
+                <input type="text" id="chatInput" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChat()">
+                <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
+              </div>
+            </div>
+            <div class="chat-preview">
+              <strong style="color:var(--text);font-size:12px">API 响应</strong>
+              <pre id="chatResponse">等待请求...</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ====== Page: 操作日志 ====== -->
+      <div class="page" id="page-log">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot"></span>操作日志</div>
+            <div class="panel-actions"><button class="btn btn-sm" onclick="clearLog()">清空</button></div>
+          </div>
+          <div class="log-area" id="logArea">
+            <div class="log-line info"><span class="ts">--:--:--</span>面板已加载，等待数据...</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let refreshTimer = null;
+let logLines = [];
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(API + url);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return await r.json();
+  } catch (e) {
+    log('error', `请求失败 ${url}: ${e.message}`);
+    setConnected(false);
+    return null;
+  }
+}
+
+function setConnected(ok) {
+  const b = document.getElementById('connBadge');
+  b.className = 'status-badge ' + (ok ? 'ok' : 'err');
+  b.innerHTML = `<span class="dot"></span>${ok ? '已连接' : '断开'}`;
+}
+
+// ===== Stats =====
+async function loadStats() {
+  const d = await fetchJSON('/api/v1/stats');
+  if (!d) return;
+  setConnected(true);
+  const bp = d.data?.browser_pool || {};
+  const ap = d.data?.account_pool || {};
+  document.getElementById('sWorkers').textContent = bp.total_workers ?? 0;
+  document.getElementById('sWorkersSub').textContent = `空闲 ${bp.idle_workers ?? 0} / 繁忙 ${bp.busy_workers ?? 0}`;
+  document.getElementById('sAccounts').textContent = ap.total ?? 0;
+  document.getElementById('sAccountsSub').textContent = `空闲 ${ap.idle ?? 0} / 冷却 ${ap.cooldown ?? 0}`;
+  document.getElementById('sMemory').textContent = `${(bp.total_memory_mb ?? 0).toFixed(0)} MB`;
+  document.getElementById('sMemorySub').textContent = `上限 ${(bp.max_workers ?? 0) * 1500} MB`;
+  document.getElementById('sPool').textContent = bp.pool_usage ?? '0/0';
+  document.getElementById('sPoolSub').textContent = `最大 ${bp.max_workers ?? 0} 个`;
+  document.getElementById('lastRefresh').textContent = new Date().toLocaleTimeString();
+  await loadAccountOptions();
+}
+
+// ===== Accounts =====
+async function loadAccounts() {
+  const d = await fetchJSON('/api/v1/admin/accounts');
+  if (!d) return;
+  const entries = Object.values(d.accounts || {});
+  if (!entries.length) { document.getElementById('accountsTable').innerHTML = '<div class="empty">暂无账号</div>'; return; }
+  let h = '<table><thead><tr><th>账号</th><th>平台</th><th>状态</th><th>3h 用量</th><th>冷却</th><th>节点</th><th>操作</th></tr></thead><tbody>';
+  for (const a of entries) {
+    const cd = a.cooldown_until > Date.now()/1000 ? fmtDur(a.cooldown_until - Date.now()/1000) : '-';
+    const pct = Math.min(100, a.current_usage_3h / 40 * 100);
+    const cls = a.current_usage_3h > 30 ? 'high' : a.current_usage_3h > 20 ? 'mid' : 'low';
+    h += `<tr>
+      <td><b>${esc(a.display_name || a.account_id)}</b></td>
+      <td>${badge(a.platform||'gemini')}</td>
+      <td>${badge(a.status)}</td>
+      <td><div class="progress"><div class="progress-fill ${cls}" style="width:${pct}%"></div></div>${a.current_usage_3h}/40</td>
+      <td style="color:var(--text-dim)">${cd}</td>
+      <td style="color:var(--text-dim)">${a.worker_id || '-'}</td>
+      <td>
+        <button class="btn btn-sm" onclick="resetAccount('${esc(a.account_id)}')">重置</button>
+        <button class="btn btn-sm btn-danger" onclick="forceCd('${esc(a.account_id)}')">冷却</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteAccount('${esc(a.account_id)}')">删除</button>
+      </td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+  document.getElementById('accountsTable').innerHTML = h;
+}
+async function resetQuota(id) { await fetch(`${API}/api/v1/admin/quota/reset/${id}`,{method:'POST'}); log('ok',`配额已重置: ${id}`); loadAccounts(); loadStats(); }
+async function forceCd(id) { await fetch(`${API}/api/v1/admin/accounts/${id}/cooldown`,{method:'POST'}); log('warn',`已冷却: ${id}`); loadAccounts(); loadStats(); }
+
+// ===== Workers =====
+function renderWorkers(bp) {
+  const n = bp.total_workers || 0;
+  const html = n === 0
+    ? '<div class="empty">暂无活跃节点</div>'
+    : '<table><tr><td>总节点数</td><td><b>'+n+'</b></td></tr>'
+      +`<tr><td>空闲</td><td>${badge('Idle',' badge-green')} x ${bp.idle_workers??0}</td></tr>`
+      +`<tr><td>繁忙</td><td>${badge('Busy',' badge-blue')} x ${bp.busy_workers??0}</td></tr>`
+      +`<tr><td>总内存</td><td>${(bp.total_memory_mb??0).toFixed(0)} MB</td></tr>`
+      +`<tr><td>池容量</td><td>${bp.pool_usage??'0/0'}</td></tr></table>`;
+  document.getElementById('workersTable').innerHTML = html;
+  document.getElementById('workersOverview').innerHTML = html;
+}
+
+// ===== Sessions =====
+async function loadSessions() {
+  const d = await fetchJSON('/api/v1/admin/sessions');
+  if (!d) return;
+  const ss = d.sessions || [];
+  document.getElementById('sSessions').textContent = ss.length;
+  document.getElementById('sSessionsSub').textContent = ss.filter(s=>s.status==='active').length + ' 个活跃';
+  const emptyHtml = '<div class="empty">暂无会话</div>';
+  if (!ss.length) {
+    document.getElementById('sessionsTable').innerHTML = emptyHtml;
+    document.getElementById('sessionsOverview').innerHTML = emptyHtml;
+    return;
+  }
+  let h = '<table><thead><tr><th>会话 ID</th><th>账号</th><th>交互数</th><th>TTL</th><th>状态</th></tr></thead><tbody>';
+  const recent = ss.slice(0,5);
+  let h2 = '<table><thead><tr><th>会话 ID</th><th>账号</th><th>状态</th></tr></thead><tbody>';
+  for (const s of ss) {
+    const ttl = s.ttl_remaining_hours != null ? s.ttl_remaining_hours.toFixed(1)+'h' : '-';
+    h += `<tr><td style="font-family:monospace;font-size:11px">${esc(s.client_conversation_id)}</td><td>${esc(s.bound_account_id)}</td><td>${s.interaction_count}</td><td>${ttl}</td><td>${badge(s.status)}</td></tr>`;
+  }
+  for (const s of recent) {
+    h2 += `<tr><td style="font-family:monospace;font-size:11px">${esc(s.client_conversation_id)}</td><td>${esc(s.bound_account_id)}</td><td>${badge(s.status)}</td></tr>`;
+  }
+  h += '</tbody></table>';
+  h2 += '</tbody></table>';
+  document.getElementById('sessionsTable').innerHTML = h;
+  document.getElementById('sessionsOverview').innerHTML = h2;
+}
+
+// ===== Chat =====
+async function loadAccountOptions() {
+  const d = await fetchJSON('/api/v1/admin/accounts');
+  if (!d) return;
+  const sel = document.getElementById('chatAccount');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">选择账号</option>';
+  for (const [id,a] of Object.entries(d.accounts||{})) {
+    if (a.status==='Idle') sel.innerHTML += `<option value="${esc(id)}">${esc(id)}</option>`;
+  }
+  if (cur) sel.value = cur;
+}
+async function sendChat() {
+  const acc = document.getElementById('chatAccount').value;
+  const msg = document.getElementById('chatInput').value.trim();
+  const platform = document.getElementById('chatPlatform').value;
+  if (!acc||!msg) return;
+  const m = document.getElementById('chatMessages');
+  const e = m.querySelector('.empty'); if(e) e.remove();
+  m.innerHTML += `<div class="chat-msg user">${esc(msg)}</div>`;
+  document.getElementById('chatInput').value = '';
+  m.scrollTop = m.scrollHeight;
+  log('info', `发送至 ${acc} [${platform}]: ${msg.substring(0,40)}...`);
+  try {
+    const r = await fetch(`${API}/api/v1/message`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account_id:acc,message:msg,platform:platform})});
+    const d = await r.json();
+    document.getElementById('chatResponse').textContent = JSON.stringify(d,null,2);
+    if (d.status==='success') { m.innerHTML += `<div class="chat-msg assistant">${esc(d.response||'(空)')}</div>`; log('ok',`回复 ${d.response?.length||0} 字符`); }
+    else { m.innerHTML += `<div class="chat-msg error">错误: ${esc(d.error||d.detail||'未知')}</div>`; log('error', d.error||d.detail); }
+  } catch(e) { m.innerHTML += `<div class="chat-msg error">网络错误: ${esc(e.message)}</div>`; log('error', e.message); }
+  m.scrollTop = m.scrollHeight;
+}
+
+// ===== Log =====
+function log(lv,msg) { const ts=new Date().toLocaleTimeString(); logLines.push({ts,lv,msg}); if(logLines.length>100)logLines.shift(); renderLog(); }
+function renderLog() { document.getElementById('logArea').innerHTML = logLines.map(l=>`<div class="log-line ${l.lv}"><span class="ts">${l.ts}</span>${esc(l.msg)}`).join(''); document.getElementById('logArea').scrollTop=9999; }
+function clearLog() { logLines=[]; document.getElementById('logArea').innerHTML='<div class="log-line info"><span class="ts">--:--:--</span>日志已清空</div>'; }
+
+// ===== Helpers =====
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}
+function badge(s,extra=''){const m={Idle:'green',Busy:'blue',Cooldown:'orange',Maintenance:'red',Dead:'gray',Active:'green',Deleted:'gray',Memory_blown:'red'};return`<span class="badge badge-${m[s]||'gray'}${extra}">${esc(s)}</span>`;}
+function fmtDur(s){if(s<=0)return'已过期';const m=Math.floor(s/60),h=Math.floor(m/60);return h>0?`${h}时${m%60}分`:`${m}分`;}
+
+// ===== Platforms =====
+async function loadPlatforms(){
+  const d=await fetchJSON('/api/v1/platforms');
+  if(!d)return;
+  const ps=Object.values(d.platforms||{});
+  if(!ps.length){document.getElementById('platformsOverview').innerHTML='<div class="empty">无平台</div>';return;}
+  let h='<table><thead><tr><th>平台</th><th>URL</th><th>需要登录</th><th>Guest模式</th></tr></thead><tbody>';
+  for(const p of ps){
+    h+=`<tr><td><b>${esc(p.name)}</b></td><td style="font-family:monospace;font-size:11px;color:var(--text-dim)">${esc(p.base_url)}</td>
+    <td>${p.requires_login?badge('需要登录',' badge-orange'):badge('免登录',' badge-green')}</td>
+    <td>${p.supports_guest?badge('支持',' badge-green'):badge('不支持',' badge-gray')}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('platformsOverview').innerHTML=h;
+}
+
+// ===== Account CRUD =====
+function showAddAccount(){hideForms();document.getElementById('addAccountForm').style.display='block';document.getElementById('newAccountId').focus();}
+function showBatchAdd(){hideForms();document.getElementById('batchAddForm').style.display='block';}
+function hideForms(){document.getElementById('addAccountForm').style.display='none';document.getElementById('batchAddForm').style.display='none';}
+async function addAccount(){
+  const id=document.getElementById('newAccountId').value.trim();
+  const platform=document.getElementById('addPlatform').value;
+  const name=document.getElementById('newAccountName').value.trim();
+  if(!id){log('error','请输入账号ID');return;}
+  const r=await fetch(`${API}/api/v1/admin/accounts/add?account_id=${encodeURIComponent(id)}&platform=${platform}&display_name=${encodeURIComponent(name)}`,{method:'POST'});
+  const d=await r.json();
+  if(r.ok){log('ok',`账号 ${id} (${platform}) 已添加`);document.getElementById('newAccountId').value='';document.getElementById('newAccountName').value='';hideForms();loadAccounts();}
+  else log('error',d.detail||'添加失败');
+}
+async function batchAdd(){
+  const platform=document.getElementById('batchPlatform').value;
+  const count=parseInt(document.getElementById('batchCount').value)||5;
+  const prefix=document.getElementById('batchPrefix').value.trim();
+  const r=await fetch(`${API}/api/v1/admin/accounts/batch-add?platform=${platform}&count=${count}&prefix=${encodeURIComponent(prefix)}`,{method:'POST'});
+  const d=await r.json();
+  if(r.ok){log('ok',`批量添加 ${d.accounts?.length||0} 个 ${platform} 账号`);hideForms();loadAccounts();}
+  else log('error',d.detail||'批量添加失败');
+}
+async function deleteAccount(id){
+  if(!confirm(`确定删除账号 ${id}？`))return;
+  const r=await fetch(`${API}/api/v1/admin/accounts/${encodeURIComponent(id)}`,{method:'DELETE'});
+  const d=await r.json();
+  if(r.ok){log('warn',`账号 ${id} 已删除`);loadAccounts();loadStats();}
+  else log('error',d.detail||'删除失败');
+}
+async function resetAccount(id){
+  const r=await fetch(`${API}/api/v1/admin/accounts/${encodeURIComponent(id)}/reset`,{method:'POST'});
+  const d=await r.json();
+  if(r.ok){log('ok',`账号 ${id} 已重置`);loadAccounts();loadStats();}
+  else log('error',d.detail||'重置失败');
+}
+
+// ===== Worker CRUD =====
+async function loadWorkersDetail(){
+  const d=await fetchJSON('/api/v1/admin/workers');
+  if(!d)return;
+  const ws=Object.values(d.workers||{});
+  if(!ws.length){document.getElementById('workersTable').innerHTML='<div class="empty">暂无活跃节点</div>';return;}
+  let h='<table><thead><tr><th>节点 ID</th><th>状态</th><th>账号</th><th>内存</th><th>PID</th><th>操作</th></tr></thead><tbody>';
+  for(const w of ws){
+    h+=`<tr><td style="font-family:monospace">${esc(w.id)}</td><td>${badge(w.status)}</td><td>${esc(w.account_id||'-')}</td><td>${w.memory_mb} MB</td><td>${w.pid||'-'}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="killWorker('${esc(w.id)}')">终止</button></td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('workersTable').innerHTML=h;
+}
+async function killWorker(id){
+  if(!confirm(`确定终止节点 ${id}？`))return;
+  const r=await fetch(`${API}/api/v1/admin/workers/${id}/kill`,{method:'POST'});
+  const d=await r.json();
+  if(r.ok){log('warn',`节点 ${id} 已终止`);loadWorkersDetail();loadStats();}
+  else log('error',d.detail||'终止失败');
+}
+
+// ===== Session CRUD =====
+async function loadSessionsDetail(){
+  const d=await fetchJSON('/api/v1/admin/sessions');
+  if(!d)return;
+  const ss=d.sessions||[];
+  if(!ss.length){document.getElementById('sessionsTable').innerHTML='<div class="empty">暂无会话</div>';return;}
+  let h='<table><thead><tr><th>会话 ID</th><th>账号</th><th>Web URL</th><th>交互数</th><th>TTL</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+  for(const s of ss){
+    const ttl=s.ttl_remaining_hours!=null?s.ttl_remaining_hours.toFixed(1)+'h':'-';
+    h+=`<tr><td style="font-family:monospace;font-size:11px">${esc(s.client_conversation_id)}</td><td>${esc(s.bound_account_id)}</td>
+    <td style="font-family:monospace;font-size:11px">${esc(s.web_chat_url_id||'-')}</td><td>${s.interaction_count}</td><td>${ttl}</td><td>${badge(s.status)}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="deleteSession('${esc(s.client_conversation_id)}')">删除</button></td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('sessionsTable').innerHTML=h;
+}
+async function deleteSession(id){
+  if(!confirm(`确定删除会话 ${id}？`))return;
+  const r=await fetch(`${API}/api/v1/admin/sessions/${encodeURIComponent(id)}`,{method:'DELETE'});
+  const d=await r.json();
+  if(r.ok){log('warn',`会话 ${id} 已删除`);loadSessionsDetail();loadStats();}
+  else log('error',d.detail||'删除失败');
+}
+async function clearAllSessions(){
+  if(!confirm('确定清空所有会话？'))return;
+  const r=await fetch(`${API}/api/v1/admin/sessions`,{method:'DELETE'});
+  const d=await r.json();
+  if(r.ok){log('warn','所有会话已清空');loadSessionsDetail();loadStats();}
+  else log('error',d.detail||'清空失败');
+}
+const pageTitles = {overview:'运行概览',accounts:'账号管理',workers:'浏览器节点',sessions:'会话列表',chat:'快速测试',log:'操作日志'};
+function switchPage(id,el){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  const pg = document.getElementById('page-'+id);
+  if(pg) pg.classList.add('active');
+  if(el) el.classList.add('active');
+  document.querySelector('.header-title').textContent = pageTitles[id]||id;
+}
+
+// ===== Refresh =====
+async function refreshAll(){await loadStats();await loadAccounts();await loadSessions();await loadPlatforms();const d=await fetchJSON('/api/v1/stats');if(d)renderWorkers(d.data?.browser_pool||{});}
+function startRefresh(){stopRefresh();const s=parseInt(document.getElementById('refreshInterval').value)||5;refreshTimer=setInterval(refreshAll,s*1000);}
+function stopRefresh(){if(refreshTimer){clearInterval(refreshTimer);refreshTimer=null;}}
+document.getElementById('autoRefresh').addEventListener('change',e=>{e.target.checked?startRefresh():stopRefresh();});
+document.getElementById('refreshInterval').addEventListener('change',()=>{if(document.getElementById('autoRefresh').checked)startRefresh();});
+
+// ===== Init =====
+(async()=>{log('info','面板初始化中...');await refreshAll();startRefresh();log('ok','面板就绪，自动刷新已开启');})();
+</script>
+</body>
+</html>

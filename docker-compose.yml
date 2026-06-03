@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  web2api:
+    build: .
+    container_name: web2api
+    ports:
+      - "8088:8000"
+    volumes:
+      - ./data:/app/data        # SQLite 持久化
+      - ./logs:/app/logs        # 日志
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: web2api-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
