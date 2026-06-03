@@ -218,33 +218,7 @@ docker-compose down
 
 http://localhost:8000/
 
-输出示例：
-
-╔═══════════════════════════════════════════════╗
-
-║          🚀 Web2API Gateway v1.3.0           ║
-
-║  AI Web Interface to OpenAI API Gateway      ║
-
-║                                              ║
-
-║  📖 http://0.0.0.0:8000                     ║
-
-║  🔗 OpenAI API: POST /v1/chat/completions   ║
-
-║  🔗 Native API: POST /api/v1/message        ║
-
-║  📊 Stats: GET /api/v1/stats                ║
-
-║  🏦 Accounts: GET /api/v1/admin/accounts    ║
-
-╚═══════════════════════════════════════════════╝
-
 ```
-
-> **独立模式**：无 Redis 时系统自动以独立模式运行，会话管理和配额功能降级，但核心消息代理功能完全可用。
-
----
 
 ## 🔌 API 文档
 
@@ -551,32 +525,6 @@ async def test_api():
 asyncio.run(test_api())
 ```
 
-### 使用Pytest进行单元测试
-
-```bash
-pip install pytest pytest-asyncio
-pytest tests/
-```
-
----
-
-## 📈 性能指标
-
-基于实际测试（Windows, Gemini Guest Mode）：
-
-| 指标                   | 数值                                        |
-| ---------------------- | ------------------------------------------- |
-| 单个Worker内存占用     | ~74MB                                       |
-| 最大常驻Worker数       | 5                                           |
-| 总内存使用（5 Worker） | ~370MB                                      |
-| 单条对话流量（有拦截） | ~300-400KB                                  |
-| **流量节省**     | **~90%**                              |
-| 平均响应时间           | 3-8秒（取决于Gemini响应速度）               |
-| QPS容量                | ~2-3 req/sec （受限于Gemini官方限制）       |
-| Redis依赖              | **可选**，无Redis时自动降级为独立模式 |
-
----
-
 ## 🤝 贡献与反馈
 
 本项目欢迎贡献！如有问题或建议：
@@ -599,29 +547,17 @@ MIT License - 见 [LICENSE](LICENSE) 文件
 
 - [Playwright](https://playwright.dev) - 浏览器自动化
 - [FastAPI](https://fastapi.tiangolo.com) - 现代Web框架
-- [Redis](https://redis.io) - 高速缓存
 - [Loguru](https://github.com/Delgan/loguru) - 结构化日志
 
 ---
 
 ## ⚠️ 已知限制
 
-| 限制                | 说明                                                    | 解决方案                                |
+| 限制                | 说明                                                    | 解决方法                                |
 | ------------------- | ------------------------------------------------------- | --------------------------------------- |
-| Redis 可选          | 无 Redis 时会话持久化和配额计数不可用                   | 独立模式降级，核心代理功能正常          |
 | 多轮对话            | 每次请求新建独立对话，未实现 conversation_id 跨请求关联 | 需配合 conversation_id 映射表实现       |
 | SSE 流式            | 当前为模拟分块发送，非真正的 Gemini 流式转发            | 需改进 DOM 监听器实时捕获增量文本       |
 | Chrome 路径         | 硬编码 Windows Chrome 路径                              | 生产环境需配置 `CHROME_PATH` 环境变量 |
 | Guest Mode 速率限制 | 未登录状态有官方速率限制                                | 生产环境建议配置登录态 Cookie           |
 
 ---
-
-## 📞 联系方式
-
-- 📧 Email: support@web2api.dev
-- 💬 Discord: [加入社区](https://discord.gg/web2api)
-- 📖 文档: https://docs.web2api.dev
-
----
-
-**Happy Coding! 🚀**

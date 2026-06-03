@@ -73,6 +73,16 @@ class SQLiteStore:
                 expires_at REAL
             );
 
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                request_id TEXT,
+                timestamp REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_rate_account ON rate_limits(account_id);
+            CREATE INDEX IF NOT EXISTS idx_rate_ts ON rate_limits(timestamp);
+
             CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(bound_account_id);
             CREATE INDEX IF NOT EXISTS idx_log_time ON activity_log(timestamp);
         """)
@@ -231,6 +241,32 @@ class SQLiteStore:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+    # ===== Rate Limits =====
+
+    def record_rate_request(self, account_id: str, request_id: str, window_hours: float = 3.0):
+        """记录一次请求到滑动窗口"""
+        conn = self._get_conn()
+        now = time.time()
+        cutoff = now - window_hours * 3600
+        conn.execute("DELETE FROM rate_limits WHERE account_id=? AND timestamp<?", (account_id, cutoff))
+        conn.execute("INSERT INTO rate_limits (account_id, request_id, timestamp) VALUES (?,?,?)",
+                      (account_id, request_id, now))
+        conn.commit()
+
+    def get_rate_count(self, account_id: str, window_hours: float = 3.0) -> int:
+        """获取窗口内的请求数"""
+        conn = self._get_conn()
+        cutoff = time.time() - window_hours * 3600
+        row = conn.execute("SELECT COUNT(*) as cnt FROM rate_limits WHERE account_id=? AND timestamp>?",
+                           (account_id, cutoff)).fetchone()
+        return row["cnt"] if row else 0
+
+    def reset_rate_limit(self, account_id: str):
+        """重置配额计数"""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM rate_limits WHERE account_id=?", (account_id,))
+        conn.commit()
 
 
 # 全局实例

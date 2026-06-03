@@ -146,16 +146,6 @@ class GeminiConfig:
 
 
 @dataclass
-class RedisConfig:
-    """Redis 配置"""
-    host: str = os.getenv("REDIS_HOST", "localhost")
-    port: int = int(os.getenv("REDIS_PORT", "6379"))
-    db: int = int(os.getenv("REDIS_DB", "0"))
-    password: str = os.getenv("REDIS_PASSWORD", "")
-    pool_size: int = 10
-
-
-@dataclass
 class DatabaseConfig:
     """数据库配置"""
     sqlite_path: str = os.getenv("DB_PATH", "./data/web2api.db")
@@ -175,7 +165,6 @@ class AppConfig:
     account_pool: AccountPoolConfig = field(default_factory=AccountPoolConfig)
     traffic_intercept: TrafficInterceptConfig = field(default_factory=TrafficInterceptConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
-    redis: RedisConfig = field(default_factory=RedisConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     
     @classmethod

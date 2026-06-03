@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python deps
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e . 2>/dev/null || pip install --no-cache-dir \
-    fastapi uvicorn pydantic redis playwright loguru python-dotenv \
+    fastapi uvicorn pydantic python-multipart playwright loguru python-dotenv \
     aiofiles httpx tenacity pyyaml sqlalchemy
 
 # Install Playwright Chromium (lighter than full Chrome)
