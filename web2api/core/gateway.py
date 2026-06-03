@@ -316,19 +316,17 @@ class APIGateway:
 
     async def _handle_platform_error(self, error: PlatformError, worker, acc, account_id: str) -> Dict:
         logger.warning(f"🚨 [{account_id}] Platform error [{error.error_type}]: {error.message}")
+
+        # 账号状态更新
         if acc:
-            if error.error_type == "rate_limit":
-                acc.set_cooldown(error.cooldown_minutes or 90)
-            elif error.error_type == "banned":
+            cooldown_map = {"rate_limit": 90, "banned": 0, "captcha": 30, "login_required": 0, "content_blocked": 10, "maintenance": 15}
+            cd = error.cooldown_minutes or cooldown_map.get(error.error_type, 0)
+
+            if error.error_type in ("rate_limit", "captcha", "content_blocked", "maintenance"):
+                acc.set_cooldown(cd)
+            elif error.error_type in ("banned", "login_required"):
                 acc.set_maintenance()
-            elif error.error_type == "captcha":
-                acc.set_cooldown(error.cooldown_minutes or 30)
-            elif error.error_type == "login_required":
-                acc.set_maintenance()
-            elif error.error_type == "content_blocked":
-                acc.set_cooldown(error.cooldown_minutes or 10)
-            elif error.error_type == "maintenance":
-                acc.set_cooldown(error.cooldown_minutes or 15)
+
             self._persist_account(account_id)
             if self.db:
                 self.db.log_event("error", account_id, error.error_type, error.message)
@@ -338,8 +336,25 @@ class APIGateway:
         else:
             await self._safe_release(worker, acc)
 
-        http_status_map = {"rate_limit": 429, "banned": 503, "captcha": 503, "login_required": 503, "content_blocked": 400, "maintenance": 503, "unknown": 500}
-        return {"status": "error", "error": error.message, "error_type": error.error_type, "account_id": account_id, "http_status": http_status_map.get(error.error_type, 500)}
+        # 构建用户友好的错误信息
+        guidance = {
+            "rate_limit": f"账号被限速，请等待 {error.cooldown_minutes or 90} 分钟后重试",
+            "banned": "账号已被封禁，请联系管理员",
+            "captcha": "触发人机验证，请手动登录一次后系统会自动保存 Cookie 复用",
+            "login_required": "需要登录，请手动登录后系统会自动保存 Cookie",
+            "content_blocked": "内容被安全策略拦截，请修改输入内容",
+            "maintenance": "平台维护中，请稍后重试",
+        }
+
+        http_status_map = {"rate_limit": 429, "banned": 503, "captcha": 503, "login_required": 503, "content_blocked": 400, "maintenance": 503}
+        return {
+            "status": "error",
+            "error": error.message,
+            "error_type": error.error_type,
+            "guidance": guidance.get(error.error_type, "未知错误"),
+            "account_id": account_id,
+            "http_status": http_status_map.get(error.error_type, 500),
+        }
 
     def get_gateway_stats(self) -> dict:
         return {
