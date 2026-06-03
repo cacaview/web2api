@@ -1,5 +1,8 @@
 # 🚀 Web2API - AI Web Interface to OpenAI API Gateway
 
+> **⚠️ 实验性项目声明**
+> 本项目处于**实验性开发阶段**，仅供学习和研究用途。由于各 AI 平台频繁更新网页结构和反爬策略，**大部分平台功能目前不可用**。经 2026年6月 实测，仅 Gemini（Guest Mode）可稳定使用，其他平台（ChatGPT、Claude、Perplexity 等）被 Cloudflare 拦截或需要登录。请勿用于生产环境。
+
 **将各大AI聊天网页界面（如Gemini、OpenAI等）转换为兼容的OpenAI API**
 
 Web2API是一个拟人化网页自动化中转网关，为期望将Web界面AI服务转换为标准API的开发者提供完整的解决方案。通过Playwright浏览器自动化和多账号沙盒架构，确保3天长会话的稳定运行，同时极致压低运营成本。
